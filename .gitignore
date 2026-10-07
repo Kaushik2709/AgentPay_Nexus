@@ -1,0 +1,63 @@
+# ============================================================
+# Razor Pay Track - root .gitignore
+# Monorepo: client/ (Next.js) + server/ (FastAPI)
+# Note: client/ and server/ also have their own .gitignore files.
+# ============================================================
+
+# --- Environment variables / secrets ---
+.env
+.env.*
+!.env.example
+*.pem
+
+# --- Generated tool output ---
+graphify-out/
+
+# --- Python (server) safety net ---
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# --- Node.js / Next.js (client) safety net ---
+node_modules/
+.next/
+out/
+build/
+dist/
+coverage/
+*.tsbuildinfo
+
+# --- Databases (runtime data) ---
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Logs ---
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- OS files ---
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# --- IDEs / editors ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
