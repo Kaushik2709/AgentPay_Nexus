@@ -1,206 +1,93 @@
-# Razorpay Buildathon 2026 — Track 01: AI Growth & Agentic Commerce
+# AgentPay Nexus refurbishment plan
 
-> **Project Concept**: **AgentPay Nexus** — *The Bounded, Explainable Agent-to-Merchant (A2M) Commerce Engine on Razorpay*  
-> **Documentation**: See full Product Requirements Document in [`docs/PRD.md`](file:///d:/Razor_Pay_Track/docs/PRD.md)
+Updated 2026-10-08. Target: a recruiter-ready AI/backend portfolio with a clear business scenario and reproducible engineering evidence.
 
----
+## Summary and defaults
 
-## Part 1: Track 01 Explained (Plain English + Technical Depth)
+Refurbish in **six phases**. Keep Next.js, FastAPI, Python, and a single repository. Evolve to PostgreSQL, LangGraph, and a separate worker inside one backend codebase. Demonstrate controlled computer-equipment purchasing for one merchant with isolated demo sessions. Support explicit demo and Razorpay test modes.
 
-### 1. What is Track 01 Doing?
-Currently, e-commerce is designed exclusively for humans: you search for a product on Google/Amazon, browse through 10 tabs, add items to cart, click buttons, enter addresses, and approve OTPs.
+The UI repair and documentation review are underway. The durable backend below is **planned, not implemented**. Visual browser acceptance remains pending.
 
-**Track 01 reimagines commerce where autonomous AI agents do the shopping and selling:**
-1. **AI Buyer Agents**: You tell your AI assistant: *"Buy me the best desk setup for coding under ₹20,000"*. The AI negotiates, selects the best options, checks your budget constraints, and buys it autonomously.
-2. **AI Merchant Agents (Revenue Growth)**: Merchants expose structured, machine-readable interfaces (MCP / Agent protocols) so any AI buyer in the world can discover and transact with them. In addition, the merchant's AI intelligently maximizes revenue by offering real-time custom bundles, upsells, and negotiated bulk discounts.
-3. **Razorpay Payment Rails**: The transactions are settled reliably through Razorpay test-mode APIs (Orders, Payment Links, Webhooks).
+## Phase 1 — Domain and payment correctness
 
----
+- Remove hardcoded credential defaults and require server-only test configuration. Owner rotates previously exposed credentials separately. Add secret scanning, explicit mode reporting, and no silent fake fallback.
+- Add authenticated session identity, buyer/operator/viewer permissions, ownership checks, rate limits, validation, and explicit CORS before public deployment.
+- Introduce typed money/quote/policy/order domain models, integer paise, persisted authoritative quotes, signature/expiry checks, guarded state transitions, and application-owned transactions.
+- Use PostgreSQL and Alembic. Seed a new demo database; preserve/export the local SQLite file instead of treating its unverifiable paid history as production data.
+- Reserve stock and rolling-spend capacity atomically. Guard approval decisions and payment attempts by business idempotency keys.
+- Require signed webhook deliveries, persist/deduplicate event IDs, and converge callbacks/webhooks on one settlement service. Unknown provider outcomes enter reconciliation.
+- Record order preparation separately from captured payment.
 
-### 2. The Core Functionality Required
-To win this track, the system must deliver four core capabilities:
+**Exit:** unsigned/tampered events fail; two buyers cannot reserve the last unit; repeated approval/payment has one effect; timeout never creates fictitious success.
 
-1. **Agent-Readable Catalog (Discovery)**:
-   - Exposes product data with structured schemas (JSON-LD, MCP endpoints, OpenAPI) so AI models can parse specs, stock, and pricing without web scraping.
-2. **AI Growth & Dynamic Revenue Optimizer (Merchant Side)**:
-   - Evaluates incoming buyer intent and dynamically deploys **4 Revenue Growth Strategies** to increase cart value or close deals while strictly respecting merchant gross profit margins.
-3. **Adaptive Bounded & Gated HITL Safety (The Crucial Evaluation Bar)**:
-   - AI agents must never have carte blanche access to a credit card. Every financial movement must be **bounded** (e.g., max ₹10,000/day, allowed product categories only) and **gated** (if an action exceeds limits or introduces unrequested items, it halts and requests human one-click authorization).
-4. **Explainable Audit Trail & Graceful Error Handling**:
-   - Every single rupee spent must have a plain-English explanation: *Why did the agent pick this item? What discount was applied? Why did it pass/fail the safety gate?*
-   - Handled failure scenario: what happens when an item is out of budget, stock runs out, or payment drops? The agent recovers gracefully without getting stuck or losing data.
+## Phase 2 — Durable orchestration
 
----
+- Build a real typed LangGraph: intent, retrieval, cart selection, merchant proposal, buyer review, policy, human interrupt, reservation, payment-order creation, and payment wait.
+- Persist checkpoints by workflow/thread ID, plus ordered workflow events and durable jobs.
+- Run API and worker separately. Claim PostgreSQL jobs with leases, attempt counts, and bounded retries; do not hold DB transactions across provider/model calls.
+- Retry transient read/model operations up to three attempts with backoff. Never automatically repeat an ambiguous payment submission. Guard each side effect independently of graph checkpoints.
+- Approval/rejection/revision resumes the same run; expected-version checks reject competing decisions. Persist clarification, expiry, failure, and recovery states.
+- Add versioned workflow APIs and SSE replay/reconnect; use persisted-status polling as fallback.
 
-### 3. Why Now? (Industry Standards)
-- **NPCI UAP (Unified Autonomous Payments / UPI Agent Protocol)**: India's NPCI is pioneering delegated agent payments where users delegate pre-authorized payment caps to AI bots.
-- **ACP (Agentic Commerce Protocol)**: The emerging standard for how agents request quotes, negotiate carts, and exchange settlement tokens.
-- **AP2 & x402 (HTTP 402 Payment Required)**: Standard HTTP status codes enabling AI agents to pay programmatically for APIs and goods over lightning/fiat rails.
-- **Razorpay's Vision**: Making millions of merchants transactable by millions of AI agents globally.
+**Exit:** restart during approval/provider submission preserves the run without duplicate effects; reconnect resumes the event cursor.
 
----
+## Phase 3 — Business-relevant AI and evaluation
 
-## Part 2: The 4 AI Merchant Revenue Growth Models
+- Parse Pydantic-validated requested lines, quantities, specs, exclusions, budget, and upgrade permission. Use the lower prompt/slider budget and clarify ambiguity.
+- Separate retrieval from selection: choose one suitable product per requested line unless requested quantity differs; check whole-cart budget.
+- Retain a local model adapter and add an explicit scripted adapter for deterministic demos/tests. Report mode. Hosted models are optional behind the same interface.
+- Cache embeddings by catalog version. Move blocking inference/SDK work off the API event loop.
+- Use a typed, per-node tool allowlist. Treat model/catalog content as untrusted; agents cannot mutate money or waive policy.
+- Create at least 60 labeled eval cases covering multi-item requests, irrelevant candidates, exclusions, budget disagreement, malformed model output, and injected product text.
+- Compare with a deterministic baseline; report actual intent coverage, irrelevant-item rate, policy violations, latency, and cost.
 
-The Merchant AI does not blindly push random accessories that waste the buyer's money. It dynamically selects from **4 specialized revenue growth strategies** depending on the buyer's intent, budget headroom, and inventory availability:
+**Exit:** malformed plans cannot create orders; policy invariants pass; versioned reports show measured results without invented uplift.
 
-```
-                              ┌──────────────────────────────────────────────┐
-                              │     4 AI Merchant Revenue Growth Models      │
-                              └──────────────────────┬───────────────────────┘
-                                                     │
-         ┌───────────────────┬───────────────────────┴───────────────────────┬───────────────────┐
-         ▼                   ▼                                               ▼                   ▼
-  1. Quality Upgrade   2. Conversion Closer                            3. Bulk/Subscription  4. Value Services
-  (Vertical Upsell)    (Dynamic Discount)                              (Future Revenue)      (Warranty/Care)
-  Better item instead   Save the deal from                              Discount for 6-month  Extended support
-  of extra item         bouncing to competitor                          refill commitment     or express shipping
-```
+## Phase 4 — Operator UX and browser acceptance
 
-### 1. Quality Upgrade (Vertical Upsell — Better Product, Not More Products)
-* **How It Works**: If the buyer has leftover budget but wants strict essentials, the Merchant AI recommends upgrading one of the requested items to a superior tier (e.g., standard 60Hz 4K monitor -> 120Hz Creator 4K monitor) at a discounted upgrade price.
-* **Why It Works**: Zero physical clutter for the buyer; higher transaction value and margin for the merchant.
+- Finish the repaired light workspace with responsive layout, readable controls, preserved drafts, and state-specific feedback.
+- Bind statuses to persisted workflow/payment state; handle expiry, approval conflicts, duplicate clicks, reconnect, and recovery guidance.
+- Add workflow detail routes and an approval inbox; keep technical payloads in disclosure views.
+- Use captured-order metrics; show unknown data as unavailable and empty datasets as empty/zero.
+- Browser-test all five views at 360/768/1440 px using empty, slow, disconnected, failed, and successful fixtures. Check long content, keyboard, dialogs, 200% zoom, contrast, reduced motion, and screenshots.
 
-### 2. Conversion Closer (Dynamic Anti-Abandonment Discount)
-* **How It Works**: When a buyer agent compares multiple stores, the Merchant AI detects abandonment risk and offers an instant 2–5% **Autonomous Instant-Settlement Discount** via Razorpay test rails.
-* **Why It Works**: Converts a potential bounce into guaranteed captured revenue while staying above the merchant's gross margin floor.
+**Exit:** no horizontal document overflow, unsaved-draft reset, false success, or inaccessible critical controls. This exit remains pending.
 
-### 3. Bulk / Subscription / Replenishment (Future LTV Lock-In)
-* **How It Works**: For recurring consumables (coffee beans, printer toner, cloud credits), the Merchant AI offers a discounted recurring mandate via Razorpay Subscriptions / UPI Autopay.
-* **Why It Works**: Locks in long-term Customer Lifetime Value (LTV).
+## Phase 5 — Reliability and observability evidence
 
-### 4. Value-Add Services & Protection (Zero-Clutter Peace of Mind)
-* **How It Works**: Bundles 2-Year Express Replacement Warranty or Same-Day Priority Delivery at marginal cost.
-* **Why It Works**: High-margin digital service for the merchant; genuine risk reduction for the buyer.
+- Add isolated pytest suites, Postgres fixtures, provider doubles, concurrency/restart tests, and deterministic fault injection.
+- Add structured logs/OpenTelemetry spans with workflow/node/provider IDs, stage latency, retries, policy outcomes, and model/token cost when available. Redact secrets.
+- CI checks lint/type/build, backend tests, migrations, secrets, and deterministic evals. Live-model evaluation is an explicit budgeted job.
+- Turn scenario lab into replay of actual fault-test outcomes: competing reservation, stale approval, duplicate/out-of-order webhook, timeout, audit corruption, worker restart.
+- Implement a small read-only MCP catalog adapter only after correctness, with protocol conformance tests. Until then describe catalog as REST/JSON-LD.
 
----
+**Exit:** reports include sample size, runtime/hardware, p50/p95, invariant results, and limits. Demonstrate effectively-once business effects under at-least-once delivery; do not claim exactly-once delivery.
 
-## Part 3: Adaptive Bounded & Gated HITL Safety Framework
+## Phase 6 — Portfolio packaging
 
-To solve both **uncontrolled AI spending** and **HITL notification fatigue**, AgentPay Nexus implements a 3-Tier Adaptive Safety Architecture:
+- Docker Compose: frontend, API, worker, PostgreSQL; migrations/seed, liveness/readiness, pinned dependencies.
+- Default hosted recruiter sessions to isolated, expiring scripted demos; never require personal payment data.
+- Provide one-command demo setup and a five-minute purchase/approval/failure/trace walkthrough.
+- Publish screenshots, architecture decisions, tests/evals, and a business/engineering scorecard.
+- Write resume bullets linked to implemented capabilities and reports. Defer live billing, multi-merchant scale, mandates, automated refunds, and external immutable anchoring.
 
-```
-                                  INCOMING TRANSACTION
-                                           │
-                        ┌──────────────────┴──────────────────┐
-                        ▼                                     ▼
-             [ WITHIN USER BOUNDS ]               [ OUTSIDE BOUNDS / AMBIGUOUS ]
-          • Below pre-set limit (e.g. <₹5,000)   • Exceeds budget or new category
-          • Whitelisted merchant                 • Unrequested upsell items
-          • Strict intent matched                • Price drift > 5%
-                        │                                     │
-                        ▼                                     ▼
-              ⚡ TIER 1: AUTONOMOUS                🛡️ TIER 2: GATED HITL
-             (Zero friction, instant)             (Presents 1-Click Explainability Card)
-                                                              │
-                                                              ▼
-                                                   🔐 TIER 3: HARD GATE
-                                                  (Biometric / OTP for > ₹25,000)
-```
+**Exit:** another engineer reproduces the demo from README; every claim has evidence.
 
-### How the Buyer AI Prevents Wasteful Spending (The "Shield")
-1. **Strict Intent Filtering**: If the buyer specified `strict_items_only: true`, any unrequested physical accessories offered by the merchant are automatically rejected with reason `USER_INTENT_STRICT_ITEMS_ONLY`.
-2. **Graceful Fallback**: The merchant agent immediately drops the accessory and applies a Conversion Closer discount to the base items instead.
-3. **Explainability Breakdown**: Every rupee spent or saved is accompanied by plain-English reasoning on the audit card.
+## Interfaces, migration, and folders
 
----
+POST /api/v1/workflows returns 202 and workflow ID, requires an idempotency key. GET workflow and SSE event endpoints expose durable progress; decisions carry typed action/expected version. Generate frontend types from versioned OpenAPI. Keep old /api endpoints until client migration.
 
-## Part 4: System Architecture & Data Flow
+Extract domain behavior before moving files. Introduce PostgreSQL before relying on concurrency guarantees; gate new orchestration until parity tests pass. Use additive migrations and compatible rollback versions; never destructively downgrade financial records.
 
-> **Interactive & Visual Diagrams Available in Workspace:**
-> * Open [docs/data_flow_viewer.html](file:///d:/Razor_Pay_Track/docs/data_flow_viewer.html) in your browser for the full interactive visual viewer.
-> * View the vector diagram file directly: [docs/agentpay_data_flow.svg](file:///d:/Razor_Pay_Track/docs/agentpay_data_flow.svg)
-> * Visual architectural infographic: [docs/agentic_commerce_dataflow.jpg](file:///d:/Razor_Pay_Track/docs/agentic_commerce_dataflow.jpg)
+Keep client/ and server/. Backend ownership becomes api/application/domain/orchestration/infrastructure; frontend becomes buyer/merchant/approvals/audit/scenarios features. Move behavior, tests, imports, and docs together. Refresh graphify output after each phase; generated graph data is evidence, not hand-maintained architecture.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor User as User / Shopper
-    participant BA as Buyer Agent (AI)
-    participant Guard as Safety & Policy Guard
-    participant MA as Merchant Growth Agent
-    participant RZP as Razorpay Test Gateway
-    participant Audit as Audit Trail & Ledger
+## Required tests
 
-    User->>BA: Goal: "Buy 4K monitor & ergonomic keyboard under ₹25,000"
-    BA->>MA: Query Agent-Readable Catalog (MCP / JSON-LD)
-    MA-->>BA: Catalog matches: 4K Monitor (₹18,500) + Keyboard (₹4,500) = ₹23,000
-    
-    rect rgb(235, 248, 255)
-    Note over MA: Merchant Revenue Growth Engine
-    MA->>MA: Evaluate cart: Deploy Model 1 (Vertical Upgrade to 120Hz Monitor for +₹1,500)
-    MA-->>BA: Dynamic Quote: Upgraded Setup for ₹24,500 (Merchant margin +₹700)
-    end
-
-    BA->>Guard: Evaluate Quote vs Policy Rules (Limit: ₹25,000, Category: Hardware)
-    alt Within Policy Bounds (<= ₹25,000)
-        Guard-->>BA: Decision: APPROVED (Autonomous Execution Allowed)
-        BA->>Audit: Log Policy Validation & Decision Logic
-    else Policy Exceeded / Unrequested Accessory Added
-        Guard-->>BA: Decision: GATED (Escalate to Human Approval)
-        BA->>User: Request One-Click Approval Modal with Explainability Card
-        User-->>BA: User Confirms / Modifies
-    end
-
-    BA->>MA: Accept Quote & Request Razorpay Order
-    MA->>RZP: POST /v1/orders (amount: 2450000 paise, currency: "INR", notes: { agent_id, quote_id })
-    RZP-->>MA: Return order_id & Payment Link
-    MA-->>BA: Return Order Details & Razorpay Checkout Payload
-    
-    BA->>RZP: Execute Razorpay Test Checkout (or Payment Link)
-    RZP-->>MA: Webhook: `payment.captured` with cryptographic signature
-    MA->>MA: Verify HMAC-SHA256 signature
-    MA->>Audit: Append signed transaction record to Immutable Audit Trail
-    MA-->>BA: Order confirmed & Digital Receipt Issued
-    BA-->>User: "Order Placed Successfully! Total: ₹24,500 (Upgraded to 120Hz Creator 4K). Audit ID #8942"
-```
-
----
-
-## Part 5: Technology Stack Specification & Implementation Plan
-
-### 1. Technology Stack Matrix
-
-| Layer / Tier | Technology / Framework | Key Packages | Purpose & Justification |
-| :--- | :--- | :--- | :--- |
-| **Backend Runtime** | **Python 3.11+ / FastAPI** | `fastapi`, `uvicorn`, `pydantic`, `httpx` | High-throughput asynchronous backend with auto-generated Swagger UI and Pydantic validation. |
-| **Agent Orchestration** | **LangGraph + LangChain Core** | `langgraph`, `langchain-core`, `langchain-google-genai` / `langchain-openai` | Multi-agent state-graph workflow with **native HITL `interrupt()` checkpoints**, cyclic negotiation, and deterministic rollback branching. |
-| **Payment Rails** | **Razorpay Python SDK** | `razorpay` (Official Python SDK), `hmac`, `hashlib` | Real Orders API (`POST /v1/orders`), Payment Links, Standard Checkout, Webhook HMAC-SHA256 non-repudiation. |
-| **Agent Protocols** | **MCP / JSON-LD & REST** | Schema.org Product Schemas, Pydantic Models | Machine-readable catalog, dynamic bundling, and quote negotiation. |
-| **Safety & Policy Guard** | **LangGraph Conditional Edges & Checkpoints** | `langgraph.checkpoint.memory` | Enforces budget caps, unrequested upsell shields, and triggers Tier 2/3 HITL interrupts. |
-| **Audit Ledger** | **Cryptographic State Checkpointer** | `hashlib` (SHA-256 state hashes) | Non-repudiation, step-by-step explainability cards, and recovery replay. |
-| **Frontend Framework** | **Next.js 14+ (App Router) + TypeScript** | `next`, `react`, `lucide-react`, `canvas-confetti` | Production-grade reactive showcase dashboard with dark glassmorphic aesthetics. |
-| **Styling** | **Vanilla CSS Design System** | Custom CSS variables & tokens | Lightweight, silky animations, zero Tailwind version conflicts. |
-
----
-
-### 2. Backend Server Architecture (`server/`)
-* **`server/app/main.py`**: FastAPI application entrypoint with CORS and route mounting.
-* **`server/app/catalog/`**: Product repository with JSON-LD schema metadata, stock, cost price, and gross margin floors.
-* **`server/app/agents/supervisor.py`**: **Commerce Supervisor Agent (Orchestrator)** managing graph state, worker routing, HITL interrupts, and atomic rollbacks.
-* **`server/app/agents/buyer_agent.py`**: Consumer advocate worker (Intent parsing, MCP queries, unrequested upsell shield).
-* **`server/app/agents/merchant_agent.py`**: Revenue growth worker (4 Growth Models, gross margin floor verification, cryptographic quote generation).
-* **`server/app/safety/policy_engine.py`**: Sentinel worker (Spending limits, category whitelist, Tier 2/3 HITL evaluation).
-* **`server/app/razorpay/settlement_agent.py`**: Fintech worker (Razorpay Orders API, Payment Links, Webhook HMAC signature verification).
-* **`server/app/audit/ledger.py`**: Immutable decision, explainability, and transaction rollback ledger.
-
-### 3. Frontend Showcase Dashboard (`client/`)
-* **Tab 1: AI Buyer Simulator**: Interactive conversational interface with live execution traces showing MCP tool calls, quote negotiations, and Razorpay modal triggers.
-* **Tab 2: Merchant Revenue Dashboard**: Real-time controls for profit margin floors, active revenue growth models, catalog inventory, and revenue uplift metrics.
-* **Tab 3: Safety & Policy Gate Inspector**: Interactive policy editor with spending limit sliders, category whitelists, and live HITL approval modals.
-* **Tab 4: Immutable Audit Trail**: Expandable timeline of every financial decision with natural language explainability cards and cryptographic Razorpay order hashes.
-* **Tab 5: Failure & Edge-Case Lab**: 1-click test triggers for budget breaches, inventory race conditions, and unrequested upsell rejections.
-
----
-
-## Part 6: Handled Failure Scenarios (The Evaluation Bar)
-
-1. **Failure Case 1: Budget Cap Breach**:
-   - User budget: ₹15,000. Desired setup: ₹18,200.
-   - Guard halts autonomous debit, explains the ₹3,200 overage, and presents Tier 2 HITL 1-click budget escalation or in-budget alternatives.
-2. **Failure Case 2: Stock Race Condition & Rollback**:
-   - Simulates inventory depletion right before Razorpay order confirmation.
-   - Agent immediately cancels the reserved quote, releases held funds, logs rollback in audit trail, and suggests in-stock substitutes without orphaned charges.
-3. **Failure Case 3: Unrequested Upsell Rejection**:
-   - Buyer AI rejects merchant's add-on accessory because user selected strict items only.
-   - Merchant agent catches rejection, drops accessory, applies a 2% Conversion Closer discount on base items, and completes checkout smoothly.
+| Area | Cases |
+| --- | --- |
+| Intent/cart | Multi-line, quantities, missing specs, unavailable catalog, budget conflicts, invalid model output |
+| Pricing/policy | Margin floor, upsell consent, disallowed category, exact cap, rolling limit, concurrent spend |
+| Approval | Approve/reject, repeated request, competing decisions, expiry, adjusted budget, restart |
+| Payment/stock | Duplicate callback/webhook, missing/bad signature, unknown order, amount/currency mismatch, last-unit race, timeout after provider success |
+| Recovery/audit | Job retry, late capture, out-of-order event, concurrent append, genesis/link/payload tamper |
+| UI | Outage, empty/search-none, verification false, saving, draft preservation, long content, dialog focus/Escape, reconnect |

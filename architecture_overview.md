@@ -1,67 +1,101 @@
-# AgentPay Nexus Architecture Overview
+# AgentPay Nexus architecture
 
-Welcome to the codebase! AgentPay Nexus is a multi-agent autonomous commerce engine. The system is split into a **Python FastAPI backend** (which handles the heavy lifting of AI orchestration via LangGraph) and a **Next.js frontend** (which provides a beautiful, real-time dashboard for visibility and control).
+Updated 2026-10-08. [Findings](docs/REVIEW_FINDINGS.md) describe current defects; [the roadmap](PROJECT_BLUEPRINT.md) defines implementation order.
 
-Here is a guide on how the system works and the best files to read to understand the architecture.
-
-## 1. High-Level System Flow
-
-The core of the project is a multi-agent workflow orchestrated by LangGraph. When a user (buyer) submits an intent (e.g., "Buy me a 4k monitor under ₹25,000"):
+## Current system
 
 ```mermaid
-graph TD
-    A[Frontend: BuyerSimulatorView] -->|API Request| B(Backend: FastAPI Router)
-    B --> C{LangGraph Supervisor}
-    
-    C -->|1. Parse Intent| D[Buyer Agent]
-    D -->|Tool Call| E[(Product Catalog Database)]
-    
-    C -->|2. Optimize Price| F[Merchant Growth Agent]
-    F -.->|Dynamic Discount/Upsell| F
-    
-    C -->|3. Validate Policy| G[Policy Guard]
-    G -.->|Tier 1: Auto Pass| H[Razorpay Settlement]
-    G -.->|Tier 2: Gated HITL| I[Human In The Loop]
-    I -->|Approve| H
-    
-    H --> J[Cryptographic Audit Ledger]
+flowchart LR
+    UI[Next.js workspace] --> API[FastAPI]
+    API --> S[Sequential Python supervisor]
+    S --> B[Grounded buyer intent and selection]
+    S --> M[Merchant pricing]
+    S --> P[Policy evaluation]
+    S --> R[Razorpay adapter]
+    B --> DB[(SQLite)]
+    M --> DB
+    P --> DB
+    R --> DB
+    S --> A[Audit writer]
+    A --> DB
+    R --> RP[Razorpay test API]
 ```
 
-## 2. Where to start reading? (Backend)
+The workflow runs inside its HTTP request. Approvals and orders persist, but complete workflow state and checkpoints do not. Services commit independently, so there is no single transaction boundary for related business writes.
 
-The backend (`d:\Razor_Pay_Track\server`) is built with **FastAPI** and **LangGraph**. Start here to understand the AI logic:
+Custom-query browser testing exposed unsafe classification/category fallback and candidate-to-cart expansion. The current request path now uses `agents/purchase_intent.py` as a deterministic authorization boundary: explicit catalog families/SKUs, one unit per family, constraints/exclusions, and the minimum INR budget from text and request. Unsupported clauses, alternatives, conflicting exclusions, foreign currencies, and multi-unit requests return NEEDS_CLARIFICATION before quote/payment side effects. Discovery never silently fulfills only part of a multi-item request. Policy evaluation also takes the minimum of that budget and the stored transaction cap. This is a bounded English/INR parser, not general language understanding; future model suggestions must be validated against this boundary rather than granting purchase authority. See [custom-query evidence and limits](docs/QUERY_TEST_REVIEW.md).
+The supplied relational graph has 321 nodes and 699 edges. Its report dates to 2026-09-03 and contains inferred relationships; use current source as authority. The supervisor, catalog, settlement, and audit nodes connect multiple communities. Source inspection confirms mixed orchestration/persistence/provider responsibilities. No import cycles were detected; a wholesale folder rename is not justified.
 
-### The Brain: LangGraph Supervisor
-- **[supervisor.py](file:///d:/Razor_Pay_Track/server/app/agents/supervisor.py)**: This is the most important file in the backend. It defines the state machine (`StateGraph`). It coordinates the hand-offs between the Buyer, Merchant, and Policy agents. 
+## Target system
 
-### The Agents
-Read these to see how each specialized AI thinks and acts:
-- **[buyer_agent.py](file:///d:/Razor_Pay_Track/server/app/agents/buyer_agent.py)**: Interprets natural language intent, searches the catalog, and builds a cart.
-- **[merchant_agent.py](file:///d:/Razor_Pay_Track/server/app/agents/merchant_agent.py)**: Applies dynamic revenue algorithms (like Conversion Closer or Vertical Upsell) while strictly protecting the merchant's margin floor.
-- **[policy_guard.py](file:///d:/Razor_Pay_Track/server/app/agents/policy_guard.py)**: Acts as the safety sentinel. It enforces budget caps and whitelists, triggering Human-in-the-Loop (HITL) gates if boundaries are crossed.
+```mermaid
+flowchart TB
+    UI[Next.js feature workspaces] --> API[Authenticated FastAPI API]
+    API --> APP[Application services]
+    APP --> DB[(PostgreSQL domain state, jobs, inbox, outbox)]
+    W[Workflow worker] --> DB
+    W --> G[LangGraph with persistent checkpoints]
+    G --> B[Buyer reasoning]
+    G --> M[Merchant proposals]
+    G --> D[Deterministic cart and policy]
+    G --> PAY[Payment application service]
+    PAY --> AD[Demo or Razorpay test adapter]
+    AD --> RP[Razorpay]
+    RP --> WH[Verified webhook inbox]
+    WH --> DB
+    DB --> EV[Ordered workflow events]
+    EV --> SSE[SSE with reconnect cursor]
+    SSE --> UI
+```
 
-### APIs & Data
-- **[agent_router.py](file:///d:/Razor_Pay_Track/server/app/api/agent_router.py)**: The FastAPI endpoints that the frontend calls to start a workflow or resolve a HITL gate.
-- **[crud.py](file:///d:/Razor_Pay_Track/server/app/db/crud.py)**: Database operations for products, the policy configuration, and the cryptographic ledger.
+Use a modular monolith running API and worker processes. PostgreSQL owns business state and the initial durable queue. Redis, Kafka, Kubernetes, and microservices are unnecessary for the first portfolio workload.
 
-## 3. Where to start reading? (Frontend)
+| Boundary | Responsibility |
+| --- | --- |
+| API | Identity, ownership, validation, typed contracts |
+| Application | Use cases, transaction ownership, idempotency, commands |
+| Domain | Money, quote validity, policy, inventory/payment transitions |
+| Orchestration | Typed graph, bounded routing, checkpoints, human interrupts |
+| Infrastructure | SQL repositories, model/payment adapters, telemetry |
+| UI | Drafts, state rendering, readable evidence; no secret keys |
 
-The frontend (`d:\Razor_Pay_Track\client`) is a **Next.js** application. Start here to understand the UI architecture:
+Buyer/merchant models produce structured proposals. Reviewer nodes validate them. Policies, reservations, payment verification, and writes remain deterministic. Allow at most one quote revision after buyer review, then ask for human clarification.
 
-### The Entry Point
-- **[page.tsx](file:///d:/Razor_Pay_Track/client/src/app/page.tsx)**: The main layout container. It manages the state for the active tab (Buyer, Merchant, Policy, etc.) and houses the Navigation bar.
+## Persistence and state
 
-### The Core Views
-- **[BuyerSimulatorView.tsx](file:///d:/Razor_Pay_Track/client/src/components/BuyerSimulatorView.tsx)**: Where the user types their intent. Look here to see how we render the dynamic quote, handle the HITL Explainability Card, and trigger Razorpay.
-- **[StateGraphVisualizer.tsx](file:///d:/Razor_Pay_Track/client/src/components/StateGraphVisualizer.tsx)**: The visual pipeline component that dynamically highlights which LangGraph node (Agent) is currently executing in real-time.
-- **[MerchantGrowthView.tsx](file:///d:/Razor_Pay_Track/client/src/components/MerchantGrowthView.tsx)**: The dashboard where the merchant configures their protected margin floor and active AI algorithms.
-- **[PolicyGuardView.tsx](file:///d:/Razor_Pay_Track/client/src/components/PolicyGuardView.tsx)**: Where users manage safety boundaries (like max limits) and manually approve/reject gated transactions.
+Use PostgreSQL and Alembic. Persist workflows, intent/quote revisions, approvals, orders, payment attempts, stock/spend reservations, workflow events, webhook inbox, and job/outbox records. Replace fixed buyer IDs with explicit identity and foreign keys.
 
-### The API Layer
-- **[api.ts](file:///d:/Razor_Pay_Track/client/src/lib/api.ts)**: A clean wrapper around the standard `fetch` API. It defines all the TypeScript interfaces for the backend responses (Quotes, Audit Trails, Workflows). 
+Money is integer paise plus currency. Version quotes and policies. Quote digests cover lines, quantities, prices, currency, expiry, and merchant identity.
 
-## 4. Key Design Patterns to Notice
+Workflow states: RECEIVED, INTERPRETING, QUOTING, POLICY_CHECK, AWAITING_APPROVAL, RESERVING, AWAITING_PAYMENT, COMPLETED; alternative outcomes are NEEDS_CLARIFICATION, REJECTED, FAILED, EXPIRED, RECOVERY_REQUIRED. Payment attempts independently track CREATING, CREATED, AUTHORIZED, CAPTURED, FAILED, UNKNOWN.
 
-1. **Deterministic Bounding**: Notice how the `MerchantGrowthAgent` can generate creative discounts, but before returning, it strictly checks `if new_margin < margin_floor`. AI proposes, code disposes.
-2. **Explainability**: The system never just rejects or pauses a transaction. It always returns an `ExplainabilityCard` object containing the exact policy rule that was violated, making AI behavior transparent.
-3. **Cryptographic Auditing**: Every agent action is appended to a ledger. Notice how each block includes an `entry_hash` created using the `prev_hash` (just like a Blockchain), guaranteeing that autonomous actions cannot be secretly altered after the fact.
+Approval resumes the same workflow/thread. Reevaluate quote expiry, inventory, policy, and authorized budget revision. Checkpointing is not payment idempotency; every side effect also needs database-level business keys and guarded transitions.
+
+## Payment and concurrency
+
+- Derive order amount/items from the persisted server quote; never trust a client amount.
+- Reserve every line and spend capacity in one transaction with conditional updates and checked row counts. Fail the whole reservation if one line fails.
+- Commit a payment attempt/job before provider submission; do not hold DB transactions across network calls.
+- Enforce one active attempt per order and one application per provider payment ID. Lock/check state before transitions.
+- Require raw-body webhook signatures; deduplicate event IDs; check known order, amount, currency, and captured status.
+- Checkout and webhooks use the same idempotent settlement service. Commit business effects and audit events together.
+- Provider timeout after submission enters UNKNOWN for reconciliation. Never silently fabricate success or blindly resubmit.
+- Ten-minute reservation expiry first reconciles pending provider state. Late capture or ambiguity goes to RECOVERY_REQUIRED rather than silently releasing paid inventory.
+
+Serialize audit append with a locked per-stream head and unique sequence. Verify genesis and subsequent links. Hash chaining is tamper evidence; external signed anchoring is deferred, so immutability and non-repudiation claims are excluded.
+
+## Planned interfaces
+
+Introduce POST `/api/v1/workflows` with idempotency key returning 202/workflow ID; GET `/workflows/{id}`; SSE `/workflows/{id}/events` with ordered IDs and reconnect cursor; and `/approvals/{id}/decision` with typed action and expected version.
+
+Checkout verification accepts an owned order reference and provider IDs/signature, never a client-authoritative amount. Generate frontend types from versioned OpenAPI. Keep existing `/api` compatible until UI migration. The current UI repair adds optional `razorpay_order` to approval responses.
+
+## Folder strategy
+
+Retain `client/` and `server/` in the same repository. As behavior is extracted, organize backend ownership into api, application, domain, orchestration, infrastructure. Domain code has no framework imports. Keep configuration small.
+
+Group frontend work into buyer, merchant, approvals, audit, and scenarios features with shared UI/API utilities. Move files alongside tests and behavior changes, updating imports/docs/start commands together. Do not perform a cosmetic mass move.
+
+## References
+
+[LangGraph persistence](https://docs.langchain.com/oss/python/langgraph/persistence) supports durable thread checkpoints. [Razorpay webhook guidance](https://github.com/razorpay/markdown-docs/blob/master/webhooks/best-practices.md) addresses duplicate delivery. [Razorpay test integration](https://razorpay.com/docs/server-integration/python/test-app/) documents server verification of checkout signatures.

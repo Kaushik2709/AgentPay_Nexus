@@ -45,7 +45,8 @@ class PolicyGuardAgent:
         pol_res = await db.execute(pol_query)
         policy = pol_res.scalar_one_or_none()
 
-        max_tx = user_override_budget or (policy.max_tx_amount if policy else 25000.0)
+        policy_cap = policy.max_tx_amount if policy else 25000.0
+        max_tx = min(policy_cap, user_override_budget) if user_override_budget is not None else policy_cap
         daily_cap = policy.daily_velocity_cap if policy else 50000.0
         whitelist = json.loads(policy.category_whitelist) if (policy and policy.category_whitelist) else [
             "monitors", "keyboards", "mice", "electronics", "accessories", "furniture", "subscriptions", "services"

@@ -1,5 +1,7 @@
 # 🚀 X-Factor AI Engineering Project Ideas
 
+> Status update (2026-10-08): these are historical portfolio ideas, not implemented AgentPay capabilities or verified outcomes. AgentPay now focuses on business-controlled purchasing, durable orchestration, and payment correctness. Its active scope and six-phase roadmap are in [PRD.md](PRD.md) and [PROJECT_BLUEPRINT.md](PROJECT_BLUEPRINT.md). Prioritize transaction reliability and business tradeoffs rather than duplicating the resume's guardrail/RAG projects.
+
 > **Tailored for:** Kaushik Mukherjee  
 > **Target Roles:** AI Engineer, Agentic Systems Engineer, LLMOps / Inference Engineer  
 > **Core Objective:** Stand out against standard API-wrapper candidates by showcasing **fine-tuning (QLoRA)**, **vLLM inference engineering**, **modern protocols (MCP / A2A)**, and **hard systems latency/cost metrics**.

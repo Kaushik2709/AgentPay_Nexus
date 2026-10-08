@@ -61,6 +61,8 @@ class CommerceSupervisorAgent:
         # STEP 1: Intent & Goal Parsing (Buyer Agent)
         # ----------------------------------------------------
         parsed_intent = self.buyer_agent.parse_intent(request.user_goal, request.budget_cap_inr)
+        effective_budget = parsed_intent["effective_budget"]
+        strict_items = request.strict_items_only or parsed_intent.get("strict_items_only", False)
         add_trace(
             actor="BuyerAgent",
             action="PARSE_INTENT",
@@ -72,6 +74,9 @@ class CommerceSupervisorAgent:
         # ----------------------------------------------------
         # STEP 2: MCP Catalog Discovery (Buyer Agent)
         # ----------------------------------------------------
+        if parsed_intent.get("quantity_unsupported") or parsed_intent.get("unresolved_clauses") or set(parsed_intent.get("requested_families", [])) & set(parsed_intent.get("excluded_families", [])):
+            add_trace("BuyerAgent", "VALIDATE_PURCHASE_INTENT", "GATED", "Clarify the request before pricing or checkout.", parsed_intent)
+            return AgentWorkflowResponse(workflow_id=workflow_id, user_goal=request.user_goal, status="NEEDS_CLARIFICATION", steps=steps, explainability_card={"title": "Purchase request needs clarification", "status": "NEEDS_CLARIFICATION", "reasoning": "Specify supported catalog products without conflicting exclusions. This workflow currently supports one unit per requested product family; multiple-unit requests cannot be fulfilled safely.", "recommendation": "Request one item per family, or use an exact catalog SKU. No quote or payment order was created."})
         discovered_products = await self.buyer_agent.execute_catalog_discovery(db, parsed_intent)
         if not discovered_products:
             add_trace(
@@ -108,8 +113,8 @@ class CommerceSupervisorAgent:
         # STEP 3: Dynamic Quote Generation (Merchant Growth Agent)
         # ----------------------------------------------------
         buyer_ctx = BuyerContext(
-            budget_cap_inr=request.budget_cap_inr,
-            strict_items_only=request.strict_items_only,
+            budget_cap_inr=effective_budget,
+            strict_items_only=strict_items,
             allow_autonomous_upsell=request.allow_autonomous_upsell
         )
         quote_req = DynamicQuoteRequest(
@@ -124,7 +129,7 @@ class CommerceSupervisorAgent:
             actor="MerchantGrowthAgent",
             action="GENERATE_DYNAMIC_QUOTE",
             status="SUCCESS",
-            summary=f"Generated quote #{quote.quote_id} deploying Growth Model: '{quote.applied_growth_model}'. Total: ₹{quote.final_total:,.2f} (Savings: ₹{quote.discount_total:,.2f}, Merchant Margin: {quote.merchant_gross_margin_pct:.1f}%)",
+            summary=f"Generated quote #{quote.quote_id} deploying Growth Model: '{quote.applied_growth_model}'. Total: ₹{quote.final_total:,.2f} (Savings: ₹{quote.discount_total:,.2f}, Merchant Margin: {quote.merchant_gross_margin_pct * 100:.1f}%)",
             payload=quote.model_dump()
         )
 
@@ -133,7 +138,7 @@ class CommerceSupervisorAgent:
         # ----------------------------------------------------
         has_rejections, rejected_skus, shield_reason = self.buyer_agent.evaluate_upsell_shield(
             offered_items=[i.model_dump() for i in quote.items],
-            strict_items_only=request.strict_items_only,
+            strict_items_only=strict_items,
             requested_skus=found_skus
         )
 
@@ -172,7 +177,7 @@ class CommerceSupervisorAgent:
         policy_result = await self.policy_guard.evaluate_quote(
             db=db,
             quote=quote,
-            user_override_budget=request.budget_cap_inr
+            user_override_budget=effective_budget
         )
 
         add_trace(
@@ -274,7 +279,7 @@ class CommerceSupervisorAgent:
             notes={
                 "workflow_id": workflow_id,
                 "growth_model": quote.applied_growth_model,
-                "merchant_margin": f"{quote.merchant_gross_margin_pct:.1f}%"
+                "merchant_margin": f"{quote.merchant_gross_margin_pct * 100:.1f}%"
             }
         )
 

@@ -1,451 +1,97 @@
 "use client";
-
-import React, { useState, useEffect } from "react";
-import { 
-  ShieldCheck, 
-  ShieldAlert, 
-  Save, 
-  CheckCircle2, 
-  RefreshCw, 
-  Lock, 
-  UserCheck,
-  SlidersHorizontal,
-  Check,
-  Zap,
-  Shield,
-  Trash2,
-  CheckCheck
-} from "lucide-react";
-import { api } from "@/lib/api";
+import { useCallback, useEffect, useState } from "react";
+import { RefreshCw, Save, ShieldCheck } from "lucide-react";
+import { api, type PolicyConfig, type PendingGate, type AgentWorkflowResponse } from "@/lib/api";
 import { ExplainabilityCard } from "./ExplainabilityCard";
+import { RazorpayModal } from "./RazorpayModal";
+import { ErrorNotice, errorMessage } from "./Feedback";
+import { Button, Pagination, Panel, Skeleton, StatePanel, StatusBadge, Toggle } from "./ui";
 
-interface PolicyGuardViewProps {
-  onGateResolved?: () => void;
-}
-
-export const PolicyGuardView: React.FC<PolicyGuardViewProps> = ({ onGateResolved }) => {
-  const [policy, setPolicy] = useState<any>(null);
-  const [pendingGates, setPendingGates] = useState<any[]>([]);
-  const [maxTx, setMaxTx] = useState<number>(25000);
-  const [dailyVelocity, setDailyVelocity] = useState<number>(50000);
-  const [whitelist, setWhitelist] = useState<string[]>([]);
-  const [allowUpsell, setAllowUpsell] = useState<boolean>(false);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [saving, setSaving] = useState<boolean>(false);
-  const [saved, setSaved] = useState<boolean>(false);
-  const [resolvingAll, setResolvingAll] = useState<boolean>(false);
-
-  const categories = [
-    { id: "monitors", label: "4K Displays & Monitors" },
-    { id: "keyboards", label: "Mechanical Keyboards" },
-    { id: "mice", label: "Ergonomic Mice" },
-    { id: "electronics", label: "Audio & Electronics" },
-    { id: "accessories", label: "Desk Hubs & Mats" },
-    { id: "subscriptions", label: "Consumables & Subscriptions" },
-    { id: "services", label: "Care & Extended Warranties" },
-  ];
-
-  const loadData = async () => {
-    setLoading(true);
-    try {
-      const [pol, gates] = await Promise.all([
-        api.getPolicyConfig(),
-        api.getPendingHITLGates(),
-      ]);
-      setPolicy(pol);
-      setPendingGates(gates);
-      setMaxTx(pol.max_tx_amount || 25000);
-      setDailyVelocity(pol.daily_velocity_cap || 50000);
-      setWhitelist(pol.category_whitelist || []);
-      setAllowUpsell(pol.allow_autonomous_upsell || false);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadData();
-    const interval = setInterval(loadData, 6000);
-    return () => clearInterval(interval);
+export function PolicyGuardView({ onGateResolved }: { onGateResolved?: () => void }) {
+  const [policy, setPolicy] = useState<PolicyConfig | null>(null);
+  const [gates, setGates] = useState<PendingGate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [queueError, setQueueError] = useState<string | null>(null);
+  const [queueLoading, setQueueLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [resolving, setResolving] = useState<string | null>(null);
+  const [order, setOrder] = useState<AgentWorkflowResponse["razorpay_order"]>();
+  const refreshQueue = useCallback(async () => {
+    setQueueLoading(true);
+    try { setGates(await api.getPendingHITLGates()); setQueueError(null); }
+    catch (err) { setQueueError(errorMessage(err)); }
+    finally { setQueueLoading(false); }
   }, []);
-
-  const handleSavePolicy = async () => {
-    setSaving(true);
+  const loadPolicy = useCallback(async () => {
+    setLoading(true); setError(null);
+    try { setPolicy(await api.getPolicyConfig()); setDirty(false); }
+    catch (err) { setError(errorMessage(err)); }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => {
+    let active = true;
+    api.getPolicyConfig().then(value => { if (active) setPolicy(value); })
+      .catch(err => { if (active) setError(errorMessage(err)); })
+      .finally(() => { if (active) setLoading(false); });
+    api.getPendingHITLGates().then(value => { if (active) setGates(value); })
+      .catch(err => { if (active) setQueueError(errorMessage(err)); })
+      .finally(() => { if (active) setQueueLoading(false); });
+    // Only refresh the queue. Never overwrite the policy draft.
+    const timer = setInterval(refreshQueue, 15000);
+    return () => { active = false; clearInterval(timer); };
+  }, [refreshQueue]);
+  function edit(update: Partial<PolicyConfig>) {
+    setPolicy(current => current ? { ...current, ...update } : current);
+    setDirty(true); setSaved(false);
+  }
+  async function save() {
+    if (!policy || saving) return;
+    setSaving(true); setError(null);
+    try { await api.updatePolicyConfig(policy); setSaved(true); setDirty(false); }
+    catch (err) { setError(errorMessage(err)); }
+    finally { setSaving(false); }
+  }
+  async function resolve(gateId: string, action: string) {
+    if (resolving) return;
+    setResolving(gateId); setError(null);
     try {
-      await api.updatePolicyConfig({
-        max_tx_amount: maxTx,
-        daily_velocity_cap: dailyVelocity,
-        category_whitelist: whitelist,
-        allow_autonomous_upsell: allowUpsell,
-      });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2500);
-      loadData();
-    } catch (err: any) {
-      alert("Failed to update policy: " + err.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleResolveGate = async (gateId: string, action: string) => {
-    try {
-      await api.resumeHITLGatedWorkflow(gateId, action);
-      loadData();
-      if (onGateResolved) onGateResolved();
-    } catch (err: any) {
-      alert("Failed to resolve gate: " + err.message);
-    }
-  };
-
-  const handleBatchResolveAll = async (action: string) => {
-    setResolvingAll(true);
-    try {
-      for (const gate of pendingGates) {
-        const gid = gate.gate_id || gate.id;
-        if (gid) {
-          await api.resumeHITLGatedWorkflow(gid, action);
-        }
-      }
-      await loadData();
-      if (onGateResolved) onGateResolved();
-    } catch (err: any) {
-      alert("Batch resolution failed: " + err.message);
-    } finally {
-      setResolvingAll(false);
-    }
-  };
-
-  const toggleCategory = (catId: string) => {
-    if (whitelist.includes(catId)) {
-      setWhitelist(whitelist.filter(c => c !== catId));
-    } else {
-      setWhitelist([...whitelist, catId]);
-    }
-  };
-
-  return (
-    <div className="space-y-6">
-      {/* Top Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center border border-amber-200">
-            <ShieldCheck className="w-5 h-5" />
-          </div>
-          <div>
-            <h2 className="text-base font-bold text-slate-900">
-              Adaptive Bounded Safety & HITL Guard
-            </h2>
-            <p className="text-xs text-slate-500">
-              Deterministic 3-tier financial boundaries with 1-click human explainability gating
-            </p>
-          </div>
+      const result = await api.resumeHITLGatedWorkflow(gateId, action);
+      if (!result.success) throw new Error(result.message);
+      if (result.razorpay_order) setOrder(result.razorpay_order);
+      await refreshQueue(); onGateResolved?.();
+    } catch (err) { setError(errorMessage(err)); }
+    finally { setResolving(null); }
+  }
+  const [page, setPage] = useState(0);
+  const [selectedGateId, setSelectedGateId] = useState<string | null>(null);
+  const pageSize = 5;
+  const currentPage = Math.min(page, Math.max(0, Math.ceil(gates.length / pageSize) - 1));
+  const visibleGates = gates.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+  const selectedGate = selectedGateId ? gates.find(gate => gate.gate_id === selectedGateId) : visibleGates[0];
+  const categories = [...new Set(["monitors", "keyboards", "mice", "electronics", "accessories", "subscriptions", "services", ...(policy?.category_whitelist || [])])];
+  return <div className="space-y-6">
+    <ErrorNotice message={error} />
+    <Panel title="Approval inbox" description="Review one purchase at a time. Approval prepares checkout; it does not complete payment." actions={<div className="flex flex-wrap items-center gap-3"><a href="#spending-policy" className="inline-flex min-h-11 items-center text-sm font-medium text-blue-700 underline underline-offset-4">Edit spending policy</a><Button variant="secondary" onClick={refreshQueue} loading={queueLoading}><RefreshCw className="size-4" />Refresh approvals</Button></div>}>
+      <ErrorNotice message={queueError} />
+      {queueLoading && gates.length === 0 ? <div role="status" aria-label="Loading approvals" className="space-y-3"><Skeleton className="h-20" /><Skeleton className="h-20" /></div> : gates.length === 0 ? <StatePanel compact icon={ShieldCheck} title={queueError ? "Approval inbox unavailable" : "You’re up to date"} description={queueError ? "Refresh the inbox to check for pending purchases." : "No purchases are currently waiting for approval."} /> : <>
+        <div className="grid items-start gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
+          <div className="space-y-2"><p className="mb-3 text-xs text-slate-500">{gates.length} pending purchases</p>{visibleGates.map((gate,index) => <button key={gate.gate_id} type="button" aria-pressed={selectedGate?.gate_id === gate.gate_id} disabled={resolving !== null} onClick={() => setSelectedGateId(gate.gate_id)} className={`w-full rounded-xl border p-4 text-left transition-colors ${selectedGate?.gate_id === gate.gate_id ? "border-blue-200 bg-blue-50" : "border-slate-200 hover:bg-slate-50"}`}><span className="flex flex-wrap items-center justify-between gap-2"><span className="text-sm font-medium">Purchase {currentPage * pageSize + index + 1}</span><span className="text-sm font-semibold tabular-nums">{typeof gate.explainability_card.order_total === "number" ? `₹${gate.explainability_card.order_total.toLocaleString("en-IN")}` : "Review"}</span></span><span className="mt-2 block break-all font-mono text-xs text-slate-500">{gate.gate_id}</span><span className="mt-3 inline-block text-xs text-amber-800">Needs your approval</span></button>)}</div>
+          <div className="min-w-0">{selectedGate ? <div><div className="mb-3 flex flex-wrap items-center justify-between gap-2"><h3 className="text-base font-semibold">Purchase decision</h3><StatusBadge tone="warning">Awaiting approval</StatusBadge></div><p className="mb-3 break-all font-mono text-xs text-slate-500">{selectedGate.gate_id}</p><ExplainabilityCard data={selectedGate.explainability_card} isPendingHitl busy={resolving !== null} onApprove={() => resolve(selectedGate.gate_id, "APPROVE")} onReject={() => resolve(selectedGate.gate_id, "REJECT")} /></div> : <StatePanel icon={ShieldCheck} title="Select a pending purchase" description="The previously selected purchase is no longer pending. Choose a purchase from the inbox." />}</div>
         </div>
-
-        <button
-          type="button"
-          onClick={loadData}
-          disabled={loading}
-          className="btn-secondary self-start sm:self-auto text-xs py-2 px-3 cursor-pointer"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-          <span>Refresh Gated Queue</span>
-        </button>
-      </div>
-
-      {/* 3-Tier Architecture Display */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="nexus-card p-4 bg-emerald-50/50 border-emerald-200">
-          <div className="flex items-center justify-between mb-2">
-            <span className="nexus-badge badge-emerald text-[10px] font-mono">
-              Tier 1 • Autonomous
-            </span>
-            <Zap className="w-4 h-4 text-emerald-600" />
-          </div>
-          <h4 className="font-bold text-slate-900 text-xs mb-1">
-            Zero-Friction Fastlane
-          </h4>
-          <p className="text-xs text-slate-600 leading-relaxed">
-            Transactions strictly under cap (≤₹{maxTx.toLocaleString()}), whitelisted categories, and matching intent settle autonomously.
-          </p>
-        </div>
-
-        <div className="nexus-card p-4 bg-amber-50/50 border-amber-200">
-          <div className="flex items-center justify-between mb-2">
-            <span className="nexus-badge badge-amber text-[10px] font-mono">
-              Tier 2 • Gated HITL
-            </span>
-            <ShieldAlert className="w-4 h-4 text-amber-600" />
-          </div>
-          <h4 className="font-bold text-slate-900 text-xs mb-1">
-            1-Click Escalation Gate
-          </h4>
-          <p className="text-xs text-slate-600 leading-relaxed">
-            Spending cap exceedances or unrequested upsells immediately halt execution and present a 1-click decision card.
-          </p>
-        </div>
-
-        <div className="nexus-card p-4 bg-rose-50/50 border-rose-200">
-          <div className="flex items-center justify-between mb-2">
-            <span className="nexus-badge badge-rose text-[10px] font-mono">
-              Tier 3 • Hard Block
-            </span>
-            <Lock className="w-4 h-4 text-rose-600" />
-          </div>
-          <h4 className="font-bold text-slate-900 text-xs mb-1">
-            Non-Negotiable Bounds
-          </h4>
-          <p className="text-xs text-slate-600 leading-relaxed">
-            Daily velocity breaches (&gt;₹{dailyVelocity.toLocaleString()}), non-whitelisted categories, or bad nonces are rejected.
-          </p>
-        </div>
-      </div>
-
-      {/* Pending HITL Gate Queue (Active Gated Transactions) */}
-      <div className="nexus-card p-6 bg-white border-slate-200 space-y-4">
-        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-          <div className="flex items-center gap-2">
-            <UserCheck className="w-4 h-4 text-amber-600" />
-            <h3 className="font-bold text-slate-900 text-sm">
-              Active HITL Gated Queue
-            </h3>
-          </div>
-          
-          <div className="flex items-center gap-2">
-            <span className={`nexus-badge font-mono text-xs ${
-              pendingGates.length > 0 ? 'badge-amber' : 'badge-emerald'
-            }`}>
-              {pendingGates.length} Pending
-            </span>
-
-            {pendingGates.length > 0 && (
-              <div className="flex items-center gap-1.5 ml-2">
-                <button
-                  type="button"
-                  onClick={() => handleBatchResolveAll("APPROVE")}
-                  disabled={resolvingAll}
-                  className="btn-emerald py-1 px-2.5 text-xs font-semibold cursor-pointer"
-                >
-                  <CheckCheck className="w-3.5 h-3.5" />
-                  <span>Authorize All</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleBatchResolveAll("REJECT")}
-                  disabled={resolvingAll}
-                  className="btn-rose py-1 px-2.5 text-xs font-semibold cursor-pointer"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span>Reject All</span>
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {pendingGates.length > 0 ? (
-          <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
-            {pendingGates.map((gate) => {
-              const gateId = gate.gate_id || gate.id;
-              const workflowId = gate.workflow_id || gate.order_id || "N/A";
-              return (
-                <div key={gateId} className="p-3.5 rounded-xl bg-amber-50/40 border border-amber-200/80 space-y-2">
-                  <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-amber-200/60">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-xs font-bold text-amber-900">
-                        Gate #{gateId}
-                      </span>
-                      <span className="text-[11px] text-slate-500 font-mono">
-                        Workflow: {workflowId}
-                      </span>
-                    </div>
-                    <span className="nexus-badge badge-amber text-[10px] font-mono">
-                      Tier 2 Intercept
-                    </span>
-                  </div>
-
-                  <ExplainabilityCard
-                    data={gate.explainability_card || {
-                      title: "HITL Transaction Boundary Exceeded",
-                      reasoning: `Quote total ₹${gate.quote_data?.final_total} exceeds policy limits.`,
-                      violations: gate.violations,
-                      order_total: gate.quote_data?.final_total,
-                      budget_cap: maxTx,
-                      applied_growth_model: gate.quote_data?.applied_growth_model,
-                      status: "GATED_PENDING_APPROVAL",
-                    }}
-                    isPendingHitl={true}
-                    onApprove={() => handleResolveGate(gateId, "APPROVE")}
-                    onReject={() => handleResolveGate(gateId, "REJECT")}
-                  />
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="p-6 text-center bg-slate-50 rounded-xl border border-slate-200">
-            <CheckCircle2 className="w-7 h-7 text-emerald-600 mx-auto mb-1.5" />
-            <h4 className="font-bold text-slate-800 text-xs">
-              All Policies Enforced & Gated Queue Clean
-            </h4>
-            <p className="text-xs text-slate-500 mt-0.5">
-              No transactions currently held in review. Trigger a workflow exceeding ₹{maxTx.toLocaleString()} to test live gating.
-            </p>
-          </div>
-        )}
-      </div>
-
-      {/* Safety Bounds Configuration Controls */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Sliders Card */}
-        <div className="nexus-card p-6 bg-white border-slate-200 space-y-4">
-          <div className="flex items-center gap-2 pb-2.5 border-b border-slate-100">
-            <SlidersHorizontal className="w-4 h-4 text-blue-600" />
-            <h3 className="font-bold text-slate-900 text-sm">
-              Financial Boundary Controls
-            </h3>
-          </div>
-
-          {/* Per Transaction Cap */}
-          <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-slate-700 font-semibold">
-                Max Per-Transaction Autonomous Cap
-              </span>
-              <span className="text-sm font-bold font-mono text-blue-700">
-                ₹{maxTx.toLocaleString()}
-              </span>
-            </div>
-            <input
-              type="range"
-              min={2000}
-              max={100000}
-              step={1000}
-              value={maxTx}
-              onChange={(e) => setMaxTx(parseInt(e.target.value))}
-              className="w-full cursor-pointer"
-            />
-            <div className="flex justify-between text-[10px] text-slate-400 font-mono">
-              <span>₹2,000</span>
-              <span>₹25,000</span>
-              <span>₹1,00,000</span>
-            </div>
-          </div>
-
-          {/* Daily Velocity Cap */}
-          <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-slate-700 font-semibold">
-                Daily Autonomous Velocity Cap
-              </span>
-              <span className="text-sm font-bold font-mono text-sky-700">
-                ₹{dailyVelocity.toLocaleString()}
-              </span>
-            </div>
-            <input
-              type="range"
-              min={5000}
-              max={200000}
-              step={5000}
-              value={dailyVelocity}
-              onChange={(e) => setDailyVelocity(parseInt(e.target.value))}
-              className="w-full cursor-pointer"
-            />
-            <div className="flex justify-between text-[10px] text-slate-400 font-mono">
-              <span>₹5,000</span>
-              <span>₹50,000</span>
-              <span>₹2,00,000</span>
-            </div>
-          </div>
-
-          {/* Autonomous Upsells Policy Switch */}
-          <label 
-            onClick={() => setAllowUpsell(!allowUpsell)}
-            className="flex items-start gap-2.5 p-3 rounded-xl bg-slate-50 border border-slate-200 cursor-pointer hover:border-slate-300 transition-all select-none"
-          >
-            <div className={`w-4 h-4 rounded mt-0.5 flex items-center justify-center border transition-all ${
-              allowUpsell ? "bg-blue-600 border-blue-600 text-white" : "border-slate-300 bg-white"
-            }`}>
-              {allowUpsell && <Check className="w-3 h-3 stroke-[3]" />}
-            </div>
-            <div>
-              <span className="font-semibold text-slate-800 text-xs block">
-                Allow Autonomous Value-Add Upsells (Tier 1)
-              </span>
-              <span className="text-[11px] text-slate-500 block leading-tight mt-0.5">
-                When disabled, any unrequested merchant warranty triggers Tier 2 HITL gating.
-              </span>
-            </div>
-          </label>
-        </div>
-
-        {/* Category Whitelist Card */}
-        <div className="nexus-card p-6 bg-white border-slate-200 flex flex-col justify-between space-y-4">
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 pb-2.5 border-b border-slate-100">
-              <Shield className="w-4 h-4 text-emerald-600" />
-              <h3 className="font-bold text-slate-900 text-sm">
-                Whitelisted Product Categories
-              </h3>
-            </div>
-            <p className="text-xs text-slate-500">
-              Agent orders outside these permitted categories will be instantly intercepted.
-            </p>
-
-            <div className="grid grid-cols-2 gap-2">
-              {categories.map((cat) => {
-                const isWhitelisted = whitelist.includes(cat.id);
-                return (
-                  <label
-                    key={cat.id}
-                    onClick={() => toggleCategory(cat.id)}
-                    className={`flex items-center gap-2 p-2.5 rounded-lg border cursor-pointer select-none text-xs transition-all ${
-                      isWhitelisted
-                        ? "bg-blue-50 border-blue-300 text-blue-950 font-medium"
-                        : "bg-slate-50 border-slate-200 text-slate-500"
-                    }`}
-                  >
-                    <div className={`w-3.5 h-3.5 rounded flex items-center justify-center border transition-all ${
-                      isWhitelisted ? "bg-blue-600 border-blue-600 text-white" : "border-slate-300 bg-white"
-                    }`}>
-                      {isWhitelisted && <Check className="w-2.5 h-2.5 stroke-[3]" />}
-                    </div>
-                    <span className="truncate">{cat.label}</span>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="pt-3 border-t border-slate-100">
-            <button
-              type="button"
-              onClick={handleSavePolicy}
-              disabled={saving}
-              className="w-full btn-primary py-2.5 text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer"
-            >
-              {saving ? (
-                <>
-                  <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                  <span>Saving Policy Limits...</span>
-                </>
-              ) : saved ? (
-                <>
-                  <Check className="w-3.5 h-3.5 text-white" />
-                  <span>Policy Enforced!</span>
-                </>
-              ) : (
-                <>
-                  <Save className="w-3.5 h-3.5" />
-                  <span>Update & Enforce Policy Sentinel</span>
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
+        <div className="mt-5"><Pagination page={currentPage} pageSize={pageSize} total={gates.length} onPageChange={value => { setPage(value); setSelectedGateId(null); }} label="approvals" /></div>
+      </>}
+    </Panel>
+    <Panel id="spending-policy" tabIndex={-1} className="scroll-mt-6" title="Spending policy" description="Set the boundaries for future purchases. Changes take effect when saved." actions={<span role="status"><StatusBadge tone={dirty ? "warning" : saved ? "success" : "neutral"}>{dirty ? "Unsaved changes" : saved ? "Policy saved" : "Current policy"}</StatusBadge></span>}>
+      {loading ? <div role="status" aria-label="Loading policy" className="space-y-3"><Skeleton className="h-20" /><Skeleton className="h-20" /></div> : !policy ? <Button variant="secondary" onClick={loadPolicy}>Retry loading policy</Button> : <fieldset disabled={saving} className="space-y-6">
+        <div className="grid gap-4 md:grid-cols-2"><div className="rounded-xl border border-slate-200 bg-slate-50 p-5"><label htmlFor="policy-purchase-limit" className="mb-4 flex flex-wrap items-center justify-between gap-3 text-sm font-medium"><span>Per-purchase limit in rupees</span><span className="text-lg font-semibold tabular-nums text-blue-700">₹{policy.max_tx_amount.toLocaleString("en-IN")}</span></label><input id="policy-purchase-limit" aria-label="Per-purchase limit in rupees" type="range" min={Math.min(0, policy.max_tx_amount)} max={Math.max(100000, policy.max_tx_amount)} step={500} value={policy.max_tx_amount} onChange={event => edit({ max_tx_amount: Number(event.target.value) })} /></div><div className="rounded-xl border border-slate-200 bg-slate-50 p-5"><label htmlFor="policy-daily-limit" className="mb-4 flex flex-wrap items-center justify-between gap-3 text-sm font-medium"><span>Daily spending limit in rupees</span><span className="text-lg font-semibold tabular-nums text-blue-700">₹{policy.daily_velocity_cap.toLocaleString("en-IN")}</span></label><input id="policy-daily-limit" aria-label="Daily spending limit in rupees" type="range" min={0} max={Math.max(200000, policy.daily_velocity_cap)} step={1000} value={policy.daily_velocity_cap} onChange={event => edit({ daily_velocity_cap: Number(event.target.value) })} /><p className="mt-2 text-xs text-slate-500">Rolling 24-hour spending boundary</p></div></div>
+        <fieldset><legend className="mb-3 text-sm font-medium">Permitted categories</legend><div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">{categories.map(category => <label key={category} className={`flex min-h-12 cursor-pointer items-center gap-3 rounded-lg border p-3 text-sm capitalize ${policy.category_whitelist.includes(category) ? "border-blue-200 bg-blue-50/50" : "border-slate-200"}`}><input type="checkbox" checked={policy.category_whitelist.includes(category)} onChange={event => edit({ category_whitelist: event.target.checked ? [...policy.category_whitelist, category] : policy.category_whitelist.filter(item => item !== category) })} className="size-4 shrink-0 accent-blue-600" />{category}</label>)}</div></fieldset>
+        <Toggle label="Allow value-add proposals" description="Buyer intent and spending limits still apply." checked={policy.allow_autonomous_upsell} onChange={() => edit({ allow_autonomous_upsell: !policy.allow_autonomous_upsell })} />
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-5"><p className="text-xs text-slate-500">Approval polling preserves your unsaved settings.</p><Button loading={saving} disabled={!dirty} onClick={save}><Save className="size-4" />{saving ? "Saving…" : "Save policy"}</Button></div>
+      </fieldset>}
+    </Panel>
+    {order && <RazorpayModal key={order.razorpay_order_id} isOpen orderData={order} onClose={() => setOrder(undefined)} onSuccess={() => onGateResolved?.()} />}
+  </div>;
+}

@@ -1,5 +1,5 @@
-from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from typing import Optional, List, Dict, Any, Literal
+from pydantic import BaseModel, Field, field_validator
 
 # ----------------- Catalog & MCP Schemas -----------------
 
@@ -41,7 +41,7 @@ class QuoteItem(BaseModel):
     category: str = "general"
 
 class BuyerContext(BaseModel):
-    budget_cap_inr: float = 25000.0
+    budget_cap_inr: float = Field(default=25000.0, gt=0, allow_inf_nan=False)
     strict_items_only: bool = False
     allow_autonomous_upsell: bool = False
     user_id: str = "aarav_buyer_01"
@@ -130,7 +130,7 @@ class PaymentVerificationResponse(BaseModel):
 
 class HITLActionRequest(BaseModel):
     gate_id: str
-    action: str  # APPROVE, REJECT, ADJUST_BUDGET
+    action: Literal["APPROVE", "REJECT", "ADJUST_BUDGET"]
     adjusted_budget: Optional[float] = None
     comment: Optional[str] = None
 
@@ -140,16 +140,25 @@ class HITLActionResponse(BaseModel):
     message: str
     order_id: Optional[str] = None
     next_step: str
+    razorpay_order: Optional[RazorpayOrderResponse] = None
 
 # ----------------- Full Multi-Agent Workflow Schemas -----------------
 
 class AgentWorkflowRequest(BaseModel):
-    user_goal: str  # e.g., "Buy me a 4K monitor and ergonomic keyboard under ₹25,000"
-    budget_cap_inr: float = 25000.0
+    user_goal: str = Field(min_length=1, max_length=2000)
+    budget_cap_inr: float = Field(default=25000.0, gt=0, allow_inf_nan=False)
     strict_items_only: bool = False
     allow_autonomous_upsell: bool = False
-    force_growth_model: Optional[str] = None  # None for auto, or "quality_upgrade", "conversion_closer", etc.
+    force_growth_model: Optional[Literal["quality_upgrade", "conversion_closer", "bulk_subscription", "value_services"]] = None
     simulate_stock_race: bool = False
+
+    @field_validator("user_goal")
+    @classmethod
+    def normalize_goal(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Purchase request cannot be blank.")
+        return value
 
 class AgentStepTrace(BaseModel):
     step_number: int

@@ -208,7 +208,7 @@ class MerchantGrowthAgent:
                     discount_total += item_discount
                     quote_items.append(QuoteItem(
                         sku=p.sku,
-                        name=p.name + " (Monthly Recurring Mandate)",
+                        name=p.name,
                         quantity=1,
                         unit_price=item_final_price,
                         original_price=p.retail_price,
@@ -229,8 +229,8 @@ class MerchantGrowthAgent:
                         is_unrequested_upsell=False,
                         category=p.category
                     ))
-            explainability_note = f"Deployed Growth Model 3 (Bulk / Subscription): 15% recurring discount (₹{int(discount_total)}) applied for automated replenishment mandate via UPI Autopay."
-            savings_breakdown = f"Subscription Mandate Discount: ₹{int(discount_total)} (15% Recurring LTV Lock-In)"
+            explainability_note = f"Deployed Growth Model 3 (Bulk / Subscription): 15% subscription-style quote discount (₹{discount_total:,.2f}). This is a one-time test order; recurring mandates are not implemented."
+            savings_breakdown = f"Subscription-style pricing discount: ₹{discount_total:,.2f} (15%)"
 
         # ----------------------------------------------------
         # EXECUTE MODEL 4: Value-Add Services & Protection

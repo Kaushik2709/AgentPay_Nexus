@@ -40,7 +40,10 @@ async def orchestrate_agent_workflow(
     Supervisor delegates to BuyerAgent, MerchantGrowthAgent, PolicyGuard, and SettlementAgent.
     """
     supervisor = CommerceSupervisorAgent()
-    return await supervisor.execute_workflow(db, request)
+    try:
+        return await supervisor.execute_workflow(db, request)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 @router.get("/hitl/pending")
 async def list_pending_hitl_gates(db: AsyncSession = Depends(get_db)):
@@ -88,5 +91,6 @@ async def resume_hitl_checkpoint(
         status=result.get("status", "RESOLVED"),
         message=result.get("message", "Success"),
         order_id=result.get("razorpay_order", {}).get("razorpay_order_id") if isinstance(result.get("razorpay_order"), dict) else None,
-        next_step=result.get("next_step", "COMPLETED")
+        next_step=result.get("next_step", "COMPLETED"),
+        razorpay_order=result.get("razorpay_order")
     )

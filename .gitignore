@@ -12,6 +12,7 @@
 
 # --- Generated tool output ---
 graphify-out/
+.playwright-mcp/
 
 # --- Python (server) safety net ---
 __pycache__/
@@ -61,3 +62,6 @@ ehthumbs.db
 *.swp
 *.swo
 *~
+
+# Isolated browser query QA logs
+server/query-qa.*.log

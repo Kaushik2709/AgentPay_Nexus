@@ -1,177 +1,63 @@
-# ⚡ AgentPay Nexus
+# AgentPay Nexus
 
-> **Autonomous Multi-Agent Commerce & Settlement Engine on Razorpay Test Rails**  
-> Built for the **Razorpay Buildathon 2026 — Track 01: AI Growth & Agentic Commerce**
+A business-focused AI engineering portfolio: turn a purchase request into a merchant quote, enforce spending policy, route exceptions to a human, and prepare an auditable test checkout.
 
-[![Razorpay](https://img.shields.io/badge/Razorpay-Test_Mode_APIs-0284c7?style=for-the-badge&logo=razorpay)](https://razorpay.com)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com)
-[![LangGraph](https://img.shields.io/badge/LangGraph-Multi_Agent_StateGraph-7c3aed?style=for-the-badge)](https://langchain-ai.github.io/langgraph/)
-[![Next.js](https://img.shields.io/badge/Next.js-14+(App_Router)-000000?style=for-the-badge&logo=nextdotjs)](https://nextjs.org)
+**Status:** working prototype undergoing an architecture refactor. This is a recruiter demonstration, not a live payment service.
 
----
+## Business problem
 
-## 📖 Table of Contents
-1. [Track 01 Overview & Problem Statement](#-track-01-overview--problem-statement)
-2. [Key Architecture & The Supervisor Pattern](#-key-architecture--the-supervisor-pattern)
-3. [4 AI Merchant Revenue Growth Models](#-4-ai-merchant-revenue-growth-models)
-4. [Adaptive Bounded & Gated HITL Safety Framework](#-adaptive-bounded--gated-hitl-safety-framework)
-5. [Immutable Cryptographic Audit Trail](#-immutable-cryptographic-audit-trail)
-6. [Tech Stack](#-tech-stack)
-7. [Quick Start & Running Locally](#-quick-start--running-locally)
-8. [5-Minute Video Demo Script](#-5-minute-video-demo-script)
-9. [Project Documentation](#-project-documentation)
+Buyers want suitable items within a budget. Merchants want profitable sales. Operators need to understand approvals, exceptions, and failures. The primary demo is computer-equipment purchasing from a single merchant.
 
----
+## Current capabilities
 
-## 🎯 Track 01 Overview & Problem Statement
+- Next.js 16, React 19, TypeScript workspace: buyer, merchant, policy, audit, and scenario views.
+- FastAPI, SQLAlchemy, local SQLite, and a sequential Python commerce coordinator.
+- Catalog-grounded intent validation and bounded product selection. One requested product per family, explicit exclusions, conservative INR budgets, and clarification before unsafe or unsupported purchases. Hugging Face helper functions remain experimental; model output no longer authorizes cart contents.
+- Merchant pricing strategies, policy checks, persistent approval records, and hash-linked audit entries.
+- Razorpay order and signature-verification integration. The UI uses provider test checkout rather than fabricating signatures.
 
-E-commerce is transitioning from manual human browsing (scrolling catalogs, filling forms, approving OTPs) to **Autonomous Agent-to-Merchant (A2M) and Agent-to-Agent (A2A) Commerce** powered by protocols like **NPCI UAP (Unified Autonomous Payments)**, **ACP (Agentic Commerce Protocol)**, and **x402 (HTTP 402 AI micropayments)**.
+The backend does **not** currently instantiate a LangGraph graph or checkpointer. Functions named “MCP” are in-process catalog/database calls, not an MCP server. Traces arrive when a request completes. Creating an order is not completing payment. Hash chaining is tamper evidence, not an immutable blockchain. Subscription pricing is illustrative; recurring mandates and fulfillment are absent.
 
-### The Challenge
-* **Merchants are invisible to AI buyers** unless they expose machine-readable protocols (MCP / JSON-LD).
-* **Merchants lose revenue** without intelligent AI agents dynamically optimizing bundles and closing deals.
-* **Consumers fear unconstrained AI spending** unless every financial action is bounded, gated, and explainable.
+## Architecture and review
 
----
+Read [the architecture](architecture_overview.md), [six-phase roadmap](PROJECT_BLUEPRINT.md), [business requirements](PRD.md), [review findings](docs/REVIEW_FINDINGS.md), and [UI verification record](docs/UI_REVIEW.md). Use [the recruiter walkthrough](script.md) to demonstrate actual capabilities.
 
-## 🏛️ Key Architecture & The Supervisor Pattern
+## Local setup
 
-AgentPay Nexus uses a **Supervisor Multi-Agent StateGraph** built in **LangGraph**:
+Use Python 3.11+ and a Node version supported by installed Next.js (Node 20.9+ minimum).
 
-```
-                               ┌────────────────────────────────────────────────────────┐
-                               │           COMMERCE SUPERVISOR AGENT (ORCHESTRATOR)      │
-                               │  - Controls LangGraph State & Route Decisions          │
-                               │  - Manages HITL Interrupts & Atomic Rollbacks          │
-                               │  - Enforces Protocol Standards (MCP, ACP, x402)        │
-                               └───────────────────────────┬────────────────────────────┘
-                                                           │
-              ┌────────────────────────────┬───────────────┴───────────────┬────────────────────────────┐
-              ▼                            ▼                               ▼                            ▼
-   ┌──────────────────────┐   ┌──────────────────────────┐   ┌──────────────────────────┐   ┌──────────────────────────┐
-   │     BUYER AGENT      │   │  MERCHANT GROWTH AGENT   │   │    POLICY GUARD AGENT    │   │ RAZORPAY SETTLEMENT AGENT│
-   │  (Consumer Advocate) │   │    (Revenue Optimizer)   │   │  (Compliance & Sentinel) │   │   (Fintech & Webhooks)   │
-   ├──────────────────────┤   ├──────────────────────────┤   ├──────────────────────────┤   ├──────────────────────────┤
-   │• Intent Parsing      │   │• 4 Revenue Growth Models │   │• Bounded Spending Caps   │   │• Orders API (POST /v1)   │
-   │• MCP Catalog Search  │   │• Margin Floor Validation │   │• Category Whitelisting   │   │• Payment Link Generation │
-   │• Upsell Shield Rej.  │   │• Cryptographic Quotes    │   │• Tier 2/3 HITL Triggers  │   │• HMAC Webhook Signature  │
-   └──────────────────────┘   └──────────────────────────┘   └──────────────────────────┘   └──────────────────────────┘
-```
-
----
-
-## 📈 4 AI Merchant Revenue Growth Models
-
-```
-                              ┌──────────────────────────────────────────────┐
-                              │     4 AI Merchant Revenue Growth Models      │
-                              └──────────────────────┬───────────────────────┘
-                                                     │
-         ┌───────────────────┬───────────────────────┴───────────────────────┬───────────────────┐
-         ▼                   ▼                                               ▼                   ▼
-  1. Quality Upgrade   2. Conversion Closer                            3. Bulk/Subscription  4. Value Services
-  (Vertical Upsell)    (Dynamic Discount)                              (Future Revenue)      (Warranty/Care)
-  Better item instead   Save the deal from                              Discount for 6-month  Extended support
-  of extra item         bouncing to competitor                          refill commitment     or express shipping
-```
-
-1. **Model 1: Quality Upgrade (Vertical Upsell)**: Recommends upgraded 120Hz Creator 4K Monitor (+₹1,500) when budget headroom exists, delivering higher AOV without physical clutter.
-2. **Model 2: Conversion Closer (Dynamic Anti-Abandonment)**: Applies an instant 2.5% autonomous checkout discount on strict-intent buyers to beat competitor agents and guarantee order closure.
-3. **Model 3: Bulk / Subscription (Future Recurring LTV)**: 15% discount for scheduled recurring replenishment via Razorpay Subscriptions / UPI Autopay.
-4. **Model 4: Value-Add Services & Care**: Subsidized 2-Year Express Replacement Warranty delivering 90% gross margins.
-
----
-
-## 🛡️ Adaptive Bounded & Gated HITL Safety Framework
-
-```
-                                  INCOMING TRANSACTION
-                                           │
-                        ┌──────────────────┴──────────────────┐
-                        ▼                                     ▼
-             [ WITHIN USER BOUNDS ]               [ OUTSIDE BOUNDS / AMBIGUOUS ]
-          • Below pre-set limit (e.g. <₹5,000)   • Exceeds budget or new category
-          • Whitelisted merchant                 • Unrequested upsell items
-          • Strict intent matched                • Price drift > 5%
-                        │                                     │
-                        ▼                                     ▼
-              ⚡ TIER 1: AUTONOMOUS                🛡️ TIER 2: GATED HITL
-             (Zero friction, instant)             (Presents 1-Click Explainability Card)
-                                                              │
-                                                              ▼
-                                                   🔐 TIER 3: HARD GATE
-                                                  (Biometric / OTP for > ₹25,000)
-```
-
-* **Buyer AI Shield**: Automatically rejects unrequested accessories (`USER_INTENT_STRICT_ITEMS_ONLY`) so user money is never wasted.
-* **LangGraph `interrupt()`**: Halts state execution when a boundary is tested and presents a 1-click approval modal.
-
----
-
-## 🔗 Immutable Cryptographic Audit Trail
-
-Every money action is recorded with SHA-256 hash chaining:
-$$\text{Entry\_Hash} = \text{SHA256}(\text{Action} + \text{Actor} + \text{Timestamp} + \text{Previous\_Hash})$$
-
-* Demonstrates zero money leakage.
-* Produces natural language **Explainability Cards** breaking down item choice, applied discounts, and policy validation.
-
----
-
-## 💻 Tech Stack
-
-| Layer | Framework / Library | Purpose |
-| :--- | :--- | :--- |
-| **Backend** | Python 3.11+ / FastAPI + Uvicorn | Async high-throughput REST backend & auto Swagger UI (`/docs`) |
-| **AI Orchestration** | LangGraph + LangChain Core | Multi-Agent StateGraph with native HITL `interrupt()` checkpoints |
-| **Fintech Rails** | Razorpay Python SDK (`razorpay`) | Test Orders API, Payment Links, HMAC-SHA256 signature verification |
-| **Frontend** | Next.js 14+ (App Router) + TypeScript | Modern dark-mode glassmorphic showcase dashboard |
-| **Protocols** | MCP & JSON-LD Schemas (Pydantic) | Standardized machine-readable catalog & quote exchange |
-
----
-
-## 🚀 Quick Start & Running Locally
-
-### Prerequisites
-* Python 3.11+
-* Node.js v18+ & npm
-
-### 1. Start the FastAPI Backend
-```bash
+Backend:
+```powershell
 cd server
-# Windows:
 python -m venv venv
-.\venv\Scripts\activate
+.\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
-* Backend API: `http://127.0.0.1:8000`
-* Interactive Swagger Docs: `http://127.0.0.1:8000/docs`
 
-### 2. Start the Next.js Frontend
-```bash
+Frontend in a second terminal:
+```powershell
 cd client
-npm install
+npm ci
 npm run dev
 ```
-* Frontend Dashboard: `http://localhost:3000`
 
----
+Open http://localhost:3000; API docs: http://127.0.0.1:8000/docs. Startup seeds a local database. First model use may download weights. Python requirements are not yet pinned for reproducibility.
 
-## 🎥 5-Minute Video Demo Script
+Frontend API base defaults to http://127.0.0.1:8000/api, configurable with `NEXT_PUBLIC_API_URL`. Payment secrets belong on the server; never use a `NEXT_PUBLIC_*` secret. The browser only receives the public test key ID.
 
-1. **Minute 0:00 – 1:00 (The Problem & Protocol Shift)**: Explain the rise of AI buyers (NPCI UAP, ACP, x402) and why merchants need AgentPay Nexus.
-2. **Minute 1:00 – 2:15 (Merchant Growth Engine)**: Open the **Merchant Growth Dashboard**, show MCP catalog, gross margin sliders, and 4 Growth Models.
-3. **Minute 2:15 – 3:30 (Autonomous Bounded Checkout)**: Run natural language query in **AI Buyer Simulator**, show live multi-agent execution waterfall, explainability card, and complete Razorpay test payment modal.
-4. **Minute 3:30 – 5:00 (The Bar: HITL Gating, Audit Trail & Failure Handling)**:
-   * Switch to **Chaos Lab**, trigger **Budget Breach**, show the 1-click **Tier 2 HITL Gate Modal**.
-   * Show the **Immutable Audit Trail** with verified SHA-256 hash chains.
+## Payment limitations
 
----
+Do not expose the current backend publicly. The review found hardcoded server credential defaults, unsigned-webhook acceptance, non-idempotent settlement, unauthenticated mutation endpoints, and non-atomic inventory handling. Phase 1 addresses these.
 
-## 📚 Project Documentation
+Any credentials previously committed or bundled for browsers must be rotated by their owner. Removing source references does not revoke credentials.
 
-* **[`PRD.md`](file:///d:/Razor_Pay_Track/PRD.md)** — Comprehensive Product Requirements Document.
-* **[`PROJECT_BLUEPRINT.md`](file:///d:/Razor_Pay_Track/PROJECT_BLUEPRINT.md)** — Complete Technical Architecture & Video Pitch Blueprint.
-* **[`docs/data_flow_viewer.html`](file:///d:/Razor_Pay_Track/docs/data_flow_viewer.html)** — Interactive Visual Sequence Flow Viewer.
-* **[`docs/agentpay_data_flow.svg`](file:///d:/Razor_Pay_Track/docs/agentpay_data_flow.svg)** — High-precision vector architecture diagram.
+The backend can silently generate a placeholder order after provider failure. The updated UI rejects placeholders and live keys. Real provider test orders require valid server-side test credentials. Provider payment completion was not exercised during this review.
+
+## Checks
+
+From `client/`: `npm run lint`, `npx tsc --noEmit`, `npm run build`.
+
+From `server/`: `venv\Scripts\python.exe -m unittest discover -s tests -v` runs isolated approval-response checks. The older `test_backend.py` uses configured database/model/provider integrations and is not an isolated CI suite.
+
+Publish reproducible evaluation reports before claiming latency, reliability, or revenue improvements on the resume.

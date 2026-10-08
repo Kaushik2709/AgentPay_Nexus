@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { 
   TrendingUp, 
   Package, 
@@ -9,15 +9,30 @@ import {
   RefreshCw, 
   Plus, 
   Minus, 
-  Sparkles, 
+  Receipt,
+  Layers,
   Code, 
   Search, 
   Check
 } from "lucide-react";
-import { api, CatalogProduct } from "@/lib/api";
+import { api, CatalogProduct, MerchantDashboard } from "@/lib/api";
+
+import { ErrorNotice, errorMessage } from "./Feedback";
+import { CatalogSchemaDialog } from "./CatalogSchemaDialog";
+import { Button, Dialog, Field, MetricCard, Pagination, Panel, Skeleton, StatePanel, StatusBadge, Toggle } from "./ui";
+
+function InventoryControls({ product, busy, onAdjust }: { product: CatalogProduct; busy: boolean; onAdjust: (delta: number) => void }) {
+  return <div className="flex items-center justify-center gap-2">
+    <button type="button" aria-label={`Decrease stock for ${product.name}`} disabled={busy || product.stock_quantity === 0}
+      onClick={() => onAdjust(-1)} className="flex size-11 items-center justify-center rounded-lg border border-slate-200 bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:opacity-50"><Minus className="size-4" /></button>
+    <span className={`w-8 text-center font-mono text-sm font-bold ${product.stock_quantity === 0 ? "text-rose-700" : product.stock_quantity < 5 ? "text-amber-700" : "text-slate-900"}`}>{product.stock_quantity}</span>
+    <button type="button" aria-label={`Increase stock for ${product.name}`} disabled={busy}
+      onClick={() => onAdjust(1)} className="flex size-11 items-center justify-center rounded-lg border border-slate-200 bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:opacity-50"><Plus className="size-4" /></button>
+  </div>;
+}
 
 export const MerchantGrowthView: React.FC = () => {
-  const [dashboard, setDashboard] = useState<any>(null);
+  const [dashboard, setDashboard] = useState<MerchantDashboard | null>(null);
   const [products, setProducts] = useState<CatalogProduct[]>([]);
   const [marginFloor, setMarginFloor] = useState<number>(0.20);
   const [activeModels, setActiveModels] = useState<string[]>([
@@ -32,7 +47,10 @@ export const MerchantGrowthView: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [selectedProductSchema, setSelectedProductSchema] = useState<CatalogProduct | null>(null);
 
-  const loadData = async () => {
+  const [error, setError] = useState<string | null>(null);
+  const [updatingStock, setUpdatingStock] = useState<string | null>(null);
+  const loadData = useCallback(async () => {
+    setError(null);
     setLoading(true);
     try {
       const [dash, prods] = await Promise.all([
@@ -44,448 +62,87 @@ export const MerchantGrowthView: React.FC = () => {
       setMarginFloor(dash.margin_floor_pct || 0.20);
       setActiveModels(dash.active_growth_models || []);
     } catch (err) {
-      console.error(err);
+      setError(errorMessage(err));
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    loadData();
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    Promise.all([api.getMerchantDashboard(), api.getProducts()]).then(([dash, prods]) => {
+      if (!active) return;
+      setDashboard(dash); setProducts(prods);
+      setMarginFloor(dash.margin_floor_pct); setActiveModels(dash.active_growth_models);
+    }).catch(err => { if (active) setError(errorMessage(err)); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, []);
   const handleSaveConfig = async () => {
     setSavingConfig(true);
     try {
-      await api.updateMerchantConfig({
-        margin_floor_pct: marginFloor,
-        active_growth_models: activeModels,
-      });
+      await api.updateMerchantConfig({ margin_floor_pct: marginFloor, active_growth_models: activeModels });
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2500);
-      loadData();
-    } catch (err: any) {
-      alert("Failed to save merchant config: " + err.message);
-    } finally {
-      setSavingConfig(false);
-    }
+      await loadData();
+    } catch (err) { setError(errorMessage(err)); }
+    finally { setSavingConfig(false); }
   };
-
-  const toggleGrowthModel = (modelKey: string) => {
-    if (activeModels.includes(modelKey)) {
-      setActiveModels(activeModels.filter((m) => m !== modelKey));
-    } else {
-      setActiveModels([...activeModels, modelKey]);
-    }
-  };
-
+  const toggleGrowthModel = (key: string) => setActiveModels(current => current.includes(key) ? current.filter(model => model !== key) : [...current, key]);
   const handleQuickStockAdjust = async (sku: string, currentStock: number, delta: number) => {
+    if (updatingStock) return;
+    setUpdatingStock(sku); setError(null);
     const nextStock = Math.max(0, currentStock + delta);
     try {
       await api.updateProductInventory(sku, { stock_quantity: nextStock });
-      setProducts(products.map(p => p.sku === sku ? { ...p, stock_quantity: nextStock } : p));
-    } catch (err: any) {
-      alert("Failed to update stock: " + err.message);
-    }
+      setProducts(current => current.map(product => product.sku === sku ? { ...product, stock_quantity: nextStock } : product));
+    } catch (err) { setError(errorMessage(err)); }
+    finally { setUpdatingStock(null); }
   };
-
-  const filteredProducts = products.filter(p => 
-    p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    p.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    p.category.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  const modelsList = [
-    {
-      id: "quality_upgrade",
-      name: "1. Quality Upgrade (Vertical Upsell)",
-      tag: "Higher AOV • Zero Clutter",
-      desc: "Recommends upgraded 120Hz Creator 4K Monitor (+₹1,500) when budget headroom exists, delivering higher value without unrequested items.",
-      margin: "32% Margin Floor",
-    },
-    {
-      id: "conversion_closer",
-      name: "2. Conversion Closer (Dynamic Discount)",
-      tag: "Instant 2.5% Auto Discount",
-      desc: "Applies an autonomous 2.5-4% discount when buyer intent is strict, beating competitor agents to lock in deals before they bounce.",
-      margin: "25% Margin Floor",
-    },
-    {
-      id: "bulk_subscription",
-      name: "3. Bulk / Subscription (Recurring LTV)",
-      tag: "UPI Autopay • 15% Off",
-      desc: "15% discount for scheduled recurring replenishment via Razorpay Subscriptions / UPI Autopay. Locks in long-term customer LTV.",
-      margin: "20% Margin Floor",
-    },
-    {
-      id: "value_services",
-      name: "4. Value-Add Services (Warranty & Care)",
-      tag: "90% Gross Margin Add-on",
-      desc: "Attaches 2-Year Express Replacement Care (+₹1,200) yielding 90% gross margins with zero physical warehouse overhead.",
-      margin: "90% Margin Yield",
-    },
+  const filteredProducts = products.filter(product => [product.name, product.sku, product.category].some(value => value.toLowerCase().includes(searchQuery.toLowerCase())));
+  const [page, setPage] = useState(0);
+  const [confirmRefresh, setConfirmRefresh] = useState(false);
+  const pageSize = 6;
+  const currentPage = Math.min(page, Math.max(0, Math.ceil(filteredProducts.length / pageSize) - 1));
+  const visibleProducts = filteredProducts.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+  const dirty = dashboard !== null && (marginFloor !== dashboard.margin_floor_pct || JSON.stringify([...activeModels].sort()) !== JSON.stringify([...dashboard.active_growth_models].sort()));
+  const money = (value: number) => `₹${value.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+  const strategies = [
+    { id: "quality_upgrade", name: "Quality upgrade", tag: "Better product fit", desc: "Propose a higher-spec product when the buyer’s budget and intent allow it." },
+    { id: "conversion_closer", name: "Conversion discount", tag: "Price flexibility", desc: "Prepare a discounted quote within the merchant’s configured margin boundary." },
+    { id: "bulk_subscription", name: "Bulk / subscription pricing", tag: "Illustrative pricing", desc: "Explore subscription-style pricing. Recurring billing and mandates are not implemented." },
+    { id: "value_services", name: "Warranty & care", tag: "Optional service proposal", desc: "Propose a care service when the buyer’s intent and upsell settings permit it." },
   ];
-
-  return (
-    <div className="space-y-6">
-      {/* Top Header & Refresh */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100">
-            <TrendingUp className="w-5 h-5" />
-          </div>
-          <div>
-            <h2 className="text-base font-bold text-slate-900">
-              Merchant AI Growth & Revenue Engine
-            </h2>
-            <p className="text-xs text-slate-500">
-              Autonomous dynamic pricing algorithms, profit margin floor protection & MCP inventory
-            </p>
-          </div>
-        </div>
-
-        <button
-          type="button"
-          onClick={loadData}
-          disabled={loading}
-          className="btn-secondary self-start sm:self-auto text-xs py-2 px-3.5 cursor-pointer"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-          <span>Refresh Live Engine</span>
-        </button>
-      </div>
-
-      {/* KPI Metrics Strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
-        <div className="nexus-card p-3.5 bg-white border-slate-200">
-          <span className="text-[10px] text-slate-400 uppercase font-mono block font-semibold">Total Revenue</span>
-          <span className="text-xl font-bold text-slate-900 font-mono mt-1 block">
-            ₹{Number(dashboard?.total_revenue || 0).toLocaleString()}
-          </span>
-          <span className="text-[11px] text-emerald-700 font-mono font-semibold flex items-center gap-1 mt-1">
-            <TrendingUp className="w-3 h-3" /> Live Settled
-          </span>
-        </div>
-
-        <div className="nexus-card p-3.5 bg-white border-slate-200">
-          <span className="text-[10px] text-slate-400 uppercase font-mono block font-semibold">Orders Settled</span>
-          <span className="text-xl font-bold text-blue-700 font-mono mt-1 block">
-            {dashboard?.settled_orders_count || 0}
-          </span>
-          <span className="text-[11px] text-slate-400 font-mono mt-1 block">Razorpay Rails</span>
-        </div>
-
-        <div className="nexus-card p-3.5 bg-white border-slate-200">
-          <span className="text-[10px] text-slate-400 uppercase font-mono block font-semibold">Average Order (AOV)</span>
-          <span className="text-xl font-bold text-slate-900 font-mono mt-1 block">
-            ₹{Number(dashboard?.average_order_value || 23500).toLocaleString()}
-          </span>
-          <span className="text-[11px] text-emerald-700 font-mono font-semibold mt-1 block">+14.2% AI Lift</span>
-        </div>
-
-        <div className="nexus-card p-3.5 bg-white border-slate-200">
-          <span className="text-[10px] text-slate-400 uppercase font-mono block font-semibold">Discounts Granted</span>
-          <span className="text-xl font-bold text-purple-700 font-mono mt-1 block">
-            ₹{Number(dashboard?.total_discounts_granted || 0).toLocaleString()}
-          </span>
-          <span className="text-[11px] text-slate-400 font-mono mt-1 block">Floor Protected</span>
-        </div>
-
-        <div className="nexus-card p-3.5 bg-white border-slate-200">
-          <span className="text-[10px] text-slate-400 uppercase font-mono block font-semibold">Active SKUs</span>
-          <span className="text-xl font-bold text-sky-700 font-mono mt-1 block">
-            {products.length}
-          </span>
-          <span className="text-[11px] text-slate-400 font-mono mt-1 block">MCP Catalog</span>
-        </div>
-
-        <div className="nexus-card p-3.5 bg-white border-slate-200">
-          <span className="text-[10px] text-slate-400 uppercase font-mono block font-semibold">Total Stock Units</span>
-          <span className="text-xl font-bold text-amber-700 font-mono mt-1 block">
-            {products.reduce((acc, p) => acc + (p.stock_quantity || 0), 0)}
-          </span>
-          <span className="text-[11px] text-slate-400 font-mono mt-1 block">Real-time DB</span>
-        </div>
-      </div>
-
-      {/* Margin Floor & Strategy Switchboard (Side by Side on md+) */}
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
-        {/* Margin Floor Card */}
-        <div className="md:col-span-5 nexus-card p-6 bg-white border-slate-200 flex flex-col justify-between space-y-4">
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 pb-2.5 border-b border-slate-100">
-              <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100">
-                <Percent className="w-3.5 h-3.5" />
-              </div>
-              <h3 className="font-bold text-slate-900 text-sm">
-                Merchant Profit Margin Floor
-              </h3>
-            </div>
-            
-            <p className="text-xs text-slate-500 leading-relaxed">
-              Autonomous discounts and upgrades are cryptographically bounded and will <strong className="text-slate-800">NEVER</strong> breach this floor.
-            </p>
-
-            <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-slate-700 font-semibold">
-                  Guaranteed Margin Floor
-                </span>
-                <span className="text-xl font-extrabold font-mono text-emerald-700">
-                  {(marginFloor * 100).toFixed(0)}%
-                </span>
-              </div>
-              
-              <input
-                type="range"
-                min={0.10}
-                max={0.45}
-                step={0.01}
-                value={marginFloor}
-                onChange={(e) => setMarginFloor(parseFloat(e.target.value))}
-                className="w-full cursor-pointer"
-              />
-
-              <div className="flex justify-between text-[10px] text-slate-400 font-mono">
-                <span>10% (High Volume)</span>
-                <span>25% (Balanced)</span>
-                <span>45% (High Margin)</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="pt-3 border-t border-slate-100">
-            <button
-              type="button"
-              onClick={handleSaveConfig}
-              disabled={savingConfig}
-              className="w-full btn-primary py-2.5 text-xs font-bold flex items-center justify-center gap-2 cursor-pointer"
-            >
-              {savingConfig ? (
-                <>
-                  <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                  <span>Saving...</span>
-                </>
-              ) : saveSuccess ? (
-                <>
-                  <Check className="w-3.5 h-3.5 text-white" />
-                  <span>Strategy Saved!</span>
-                </>
-              ) : (
-                <>
-                  <Save className="w-3.5 h-3.5" />
-                  <span>Save Strategy Configurations</span>
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* 4 AI Growth Models Grid */}
-        <div className="md:col-span-7 nexus-card p-6 bg-white border-slate-200 space-y-4">
-          <div className="flex items-center justify-between pb-2.5 border-b border-slate-100">
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center border border-blue-100">
-                <Sparkles className="w-3.5 h-3.5" />
-              </div>
-              <h3 className="font-bold text-slate-900 text-sm">
-                4 Autonomous Growth Models
-              </h3>
-            </div>
-            <span className="nexus-badge badge-blue text-[11px] font-mono font-semibold">
-              {activeModels.length} / 4 Active
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {modelsList.map((m) => {
-              const isSelected = activeModels.includes(m.id);
-              return (
-                <div
-                  key={m.id}
-                  onClick={() => toggleGrowthModel(m.id)}
-                  className={`p-3.5 rounded-xl border transition-all cursor-pointer select-none flex flex-col justify-between ${
-                    isSelected
-                      ? "bg-blue-50/70 border-blue-300 ring-1 ring-blue-400/30 text-blue-950"
-                      : "bg-slate-50 border-slate-200 opacity-70 hover:opacity-100 text-slate-700"
-                  }`}
-                >
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-xs leading-snug">
-                        {m.name}
-                      </span>
-                      <div className={`w-3.5 h-3.5 rounded flex items-center justify-center border transition-all ${
-                        isSelected ? "bg-blue-600 border-blue-600 text-white" : "border-slate-300 bg-white"
-                      }`}>
-                        {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
-                      </div>
-                    </div>
-                    
-                    <span className="nexus-badge badge-cyan text-[9px] font-mono py-0.2">
-                      {m.tag}
-                    </span>
-
-                    <p className="text-[11px] text-slate-500 leading-relaxed">
-                      {m.desc}
-                    </p>
-                  </div>
-
-                  <div className="pt-2 mt-2 border-t border-slate-200/80 flex items-center justify-between text-[10px] font-mono text-slate-400">
-                    <span>Safety Floor:</span>
-                    <span className="text-emerald-700 font-bold">{m.margin}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* Live Production Catalog & Inventory Table */}
-      <div className="nexus-card p-6 bg-white border-slate-200 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
-          <div className="flex items-center gap-2">
-            <Package className="w-4 h-4 text-blue-600" />
-            <h3 className="font-bold text-slate-900 text-sm">
-              Live Production Catalog & MCP Inventory
-            </h3>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <div className="relative w-full sm:w-64">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <input
-                type="text"
-                placeholder="Search SKU, name, category..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="nexus-input pl-8 py-1.5 text-xs bg-slate-50/50 focus:bg-white"
-              />
-            </div>
-            <span className="nexus-badge badge-blue text-[10px] font-mono whitespace-nowrap py-1">
-              MCP / JSON-LD Ready
-            </span>
-          </div>
-        </div>
-
-        {/* Table */}
-        <div className="overflow-x-auto rounded-xl border border-slate-200">
-          <table className="w-full text-left text-xs border-collapse">
-            <thead>
-              <tr className="border-b border-slate-200 bg-slate-50 text-slate-600 font-mono text-[10px] uppercase">
-                <th className="py-2.5 px-3 font-semibold">Product / SKU</th>
-                <th className="py-2.5 px-3 font-semibold">Category</th>
-                <th className="py-2.5 px-3 text-right font-semibold">Retail Price</th>
-                <th className="py-2.5 px-3 text-right font-semibold">Cost Price</th>
-                <th className="py-2.5 px-3 text-right font-semibold">Margin %</th>
-                <th className="py-2.5 px-3 text-center font-semibold">Live Stock</th>
-                <th className="py-2.5 px-3 text-center font-semibold">MCP Schema</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 font-sans">
-              {filteredProducts.map((product) => {
-                const marginPct = ((product.retail_price - product.cost_price) / product.retail_price) * 100;
-
-                return (
-                  <tr key={product.id} className="hover:bg-slate-50/70 transition-colors">
-                    <td className="py-2.5 px-3">
-                      <div className="font-semibold text-slate-900 text-xs">{product.name}</div>
-                      <div className="font-mono text-[10px] text-blue-700 font-semibold">{product.sku}</div>
-                    </td>
-                    <td className="py-2.5 px-3">
-                      <span className="nexus-badge badge-gray text-[10px]">
-                        {product.category}
-                      </span>
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900 text-xs">
-                      ₹{product.retail_price.toLocaleString()}
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono text-slate-500 text-xs">
-                      ₹{product.cost_price.toLocaleString()}
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono">
-                      <span className={`font-bold text-xs ${marginPct >= 30 ? 'text-emerald-700' : 'text-blue-700'}`}>
-                        {marginPct.toFixed(1)}%
-                      </span>
-                    </td>
-                    <td className="py-2.5 px-3">
-                      <div className="flex items-center justify-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => handleQuickStockAdjust(product.sku, product.stock_quantity, -1)}
-                          className="w-6 h-6 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center border border-slate-200 transition-colors cursor-pointer"
-                        >
-                          <Minus className="w-3 h-3" />
-                        </button>
-                        <span className={`font-mono font-bold text-xs w-7 text-center ${
-                          product.stock_quantity === 0 ? 'text-rose-600' : product.stock_quantity < 5 ? 'text-amber-600' : 'text-slate-900'
-                        }`}>
-                          {product.stock_quantity}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => handleQuickStockAdjust(product.sku, product.stock_quantity, 1)}
-                          className="w-6 h-6 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center border border-slate-200 transition-colors cursor-pointer"
-                        >
-                          <Plus className="w-3 h-3" />
-                        </button>
-                      </div>
-                    </td>
-                    <td className="py-2.5 px-3 text-center">
-                      <button
-                        type="button"
-                        onClick={() => setSelectedProductSchema(product)}
-                        className="btn-secondary py-1 px-2.5 text-[11px] font-mono flex items-center gap-1 mx-auto cursor-pointer"
-                      >
-                        <Code className="w-3 h-3 text-sky-600" />
-                        <span>Inspect</span>
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* JSON-LD Schema Modal */}
-      {selectedProductSchema && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
-          <div className="bg-white border border-slate-200 rounded-2xl shadow-2xl max-w-xl w-full p-5 space-y-4 text-slate-900">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-200">
-              <div className="flex items-center gap-2">
-                <Code className="w-4 h-4 text-sky-600" />
-                <h3 className="font-bold text-slate-900 text-sm font-heading">
-                  JSON-LD MCP Schema • {selectedProductSchema.name}
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedProductSchema(null)}
-                className="text-slate-400 hover:text-slate-700 text-xs font-mono cursor-pointer"
-              >
-                ✕ Close
-              </button>
-            </div>
-
-            <pre className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-[11px] font-mono text-slate-800 overflow-x-auto max-h-96">
-              {JSON.stringify(selectedProductSchema.json_ld_schema, null, 2)}
-            </pre>
-
-            <div className="flex justify-end">
-              <button
-                type="button"
-                onClick={() => setSelectedProductSchema(null)}
-                className="btn-primary text-xs py-1.5 px-4 cursor-pointer"
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+  return <div className="space-y-6">
+    <ErrorNotice message={error} />
+    <div className="flex flex-wrap items-center justify-between gap-3"><p className="text-sm text-slate-500">Figures reflect records in this demo environment.</p><Button variant="secondary" loading={loading} onClick={() => dirty ? setConfirmRefresh(true) : void loadData()}><RefreshCw className="size-4" />Refresh data</Button></div>
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-3 2xl:grid-cols-6">
+      <MetricCard label="Recorded revenue" value={dashboard ? money(dashboard.metrics.total_revenue_inr) : null} caption="Orders marked paid" icon={TrendingUp} loading={loading} />
+      <MetricCard label="Paid orders" value={dashboard?.metrics.total_orders_completed ?? null} caption="Recorded order status" icon={Check} loading={loading} />
+      <MetricCard label="Average order" value={dashboard ? money(dashboard.metrics.total_orders_completed ? dashboard.metrics.avg_order_value_inr : 0) : null} caption="From recorded paid orders" icon={Receipt} loading={loading} />
+      <MetricCard label="Discounts granted" value={dashboard ? money(dashboard.metrics.total_discounts_granted_inr) : null} caption="Recorded quote discounts" icon={Percent} loading={loading} />
+      <MetricCard label="Catalog products" value={dashboard ? products.length : null} caption="Products in this catalog" icon={Package} loading={loading} />
+      <MetricCard label="Stock units" value={dashboard ? products.reduce((total, product) => total + product.stock_quantity, 0) : null} caption="Current catalog inventory" icon={Layers} loading={loading} />
     </div>
-  );
+    <Panel title="Pricing configuration" description="Choose the strategies the merchant can propose. Save to apply changes to future quotes." actions={<span role="status"><StatusBadge tone={dirty ? "warning" : saveSuccess ? "success" : "neutral"}>{dirty ? "Unsaved changes" : saveSuccess ? "Configuration saved" : "Current configuration"}</StatusBadge></span>}>
+      <fieldset disabled={loading || savingConfig || !dashboard} className="space-y-6">
+        <div className="grid gap-6 xl:grid-cols-[.65fr_1fr]">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-5"><label htmlFor="merchant-margin" className="flex flex-wrap items-center justify-between gap-3 text-sm font-medium"><span>Merchant margin floor</span><span className="text-2xl font-semibold tabular-nums text-blue-700">{(marginFloor * 100).toFixed(0)}%</span></label><p className="my-4 text-sm leading-6 text-slate-500">Minimum margin used when preparing a quote. Product selection and buyer constraints still apply.</p><input id="merchant-margin" aria-label="Merchant margin floor" type="range" min={0.10} max={0.45} step={0.01} value={marginFloor} onChange={event => setMarginFloor(Number(event.target.value))} /><div className="mt-2 flex justify-between text-xs text-slate-500"><span>10%</span><span>45%</span></div></div>
+          <div className="grid gap-3 sm:grid-cols-2">{strategies.map(strategy => <Toggle key={strategy.id} label={strategy.name} description={strategy.desc} checked={activeModels.includes(strategy.id)} onChange={() => toggleGrowthModel(strategy.id)} />)}</div>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-5"><p className="text-xs text-slate-500">{activeModels.length} of 4 strategies enabled</p><Button onClick={handleSaveConfig} loading={savingConfig} disabled={!dirty}><Save className="size-4" />{savingConfig ? "Saving…" : "Save configuration"}</Button></div>
+      </fieldset>
+    </Panel>
+    <Panel title="Catalog & inventory" description="Search products, adjust stock, and inspect the product schema." actions={<StatusBadge>{products.length} products</StatusBadge>}>
+      <div className="mb-5 flex flex-wrap items-end justify-between gap-3"><Field label="Search catalog" htmlFor="catalog-search"><div className="relative"><Search aria-hidden className="pointer-events-none absolute left-3 top-3.5 size-4 text-slate-500" /><input id="catalog-search" value={searchQuery} placeholder="Name, SKU, or category" onChange={event => { setSearchQuery(event.target.value); setPage(0); }} className="nexus-input pl-10 sm:w-80" /></div></Field><p className="text-xs text-slate-500">JSON-LD schemas available</p></div>
+      {loading ? <div role="status" aria-label="Loading catalog" className="space-y-3"><Skeleton className="h-20" /><Skeleton className="h-20" /></div> : !filteredProducts.length ? <StatePanel compact icon={Package} title={error ? "Catalog unavailable" : "No products found"} description={error ? "Refresh data to try loading the catalog again." : "Try a different name, SKU, or category."} /> : <>
+        <div className="grid gap-3 md:hidden">{visibleProducts.map(product => <article key={product.sku} className="rounded-xl border border-slate-200 p-4"><div className="mb-3 flex items-start justify-between gap-3"><h3 className="text-sm font-semibold">{product.name}</h3><StatusBadge tone={product.stock_quantity === 0 ? "danger" : product.stock_quantity < 5 ? "warning" : "neutral"}>{product.stock_quantity === 0 ? "Out of stock" : product.stock_quantity < 5 ? "Low stock" : "In stock"}</StatusBadge></div><p className="break-all font-mono text-xs text-slate-500">{product.sku}</p><p className="mt-2 text-xs capitalize text-slate-500">{product.category}</p><dl className="my-4 grid grid-cols-2 gap-3 text-sm"><div><dt className="text-xs text-slate-500">Retail price</dt><dd className="mt-1 font-semibold tabular-nums">{money(product.retail_price)}</dd></div><div><dt className="text-xs text-slate-500">Cost price</dt><dd className="mt-1 tabular-nums">{money(product.cost_price)}</dd></div><div><dt className="text-xs text-slate-500">Margin</dt><dd className="mt-1">{(product.retail_price ? (1 - product.cost_price / product.retail_price) * 100 : 0).toFixed(1)}%</dd></div></dl><div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4"><InventoryControls product={product} busy={updatingStock !== null} onAdjust={delta => handleQuickStockAdjust(product.sku, product.stock_quantity, delta)} /><Button variant="secondary" aria-label={`Inspect schema for ${product.name}`} onClick={() => setSelectedProductSchema(product)}><Code className="size-4" />Inspect</Button></div></article>)}</div>
+        <p className="mb-3 hidden text-xs text-slate-500 md:block xl:hidden">Scroll the table horizontally to see every column.</p>
+        <div role="region" aria-label="Product inventory table" tabIndex={0} className="hidden overflow-auto rounded-xl border border-slate-200 md:block"><table className="w-full min-w-[940px] whitespace-nowrap text-left text-sm"><thead className="border-b border-slate-200 bg-slate-50 text-xs font-medium text-slate-600"><tr>{["Product / SKU", "Category", "Retail price", "Cost price", "Margin", "Stock", "Schema"].map(label => <th key={label} scope="col" className="px-4 py-3 font-medium">{label}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{visibleProducts.map(product => <tr key={product.sku} className="hover:bg-slate-50/60"><td className="min-w-60 max-w-80 whitespace-normal px-4 py-4"><p className="font-medium">{product.name}</p><p className="mt-1 break-all font-mono text-xs text-slate-500">{product.sku}</p></td><td className="px-4"><StatusBadge>{product.category}</StatusBadge></td><td className="px-4 font-medium tabular-nums">{money(product.retail_price)}</td><td className="px-4 tabular-nums text-slate-600">{money(product.cost_price)}</td><td className="px-4 tabular-nums">{(product.retail_price ? (1 - product.cost_price / product.retail_price) * 100 : 0).toFixed(1)}%</td><td className="px-4"><InventoryControls product={product} busy={updatingStock !== null} onAdjust={delta => handleQuickStockAdjust(product.sku, product.stock_quantity, delta)} /></td><td className="px-4"><Button variant="secondary" aria-label={`Inspect schema for ${product.name}`} onClick={() => setSelectedProductSchema(product)}><Code className="size-4" />Inspect</Button></td></tr>)}</tbody></table></div>
+      </>}
+      {!loading && filteredProducts.length > 0 && <div className="mt-5"><Pagination page={currentPage} pageSize={pageSize} total={filteredProducts.length} onPageChange={setPage} label="products" /></div>}
+    </Panel>
+    {selectedProductSchema && <CatalogSchemaDialog product={selectedProductSchema} onClose={() => setSelectedProductSchema(null)} />}
+    {confirmRefresh && <Dialog title="Discard configuration changes?" id="discard-config-title" onClose={() => setConfirmRefresh(false)}><p className="text-sm leading-6 text-slate-600">Refreshing will replace your unsaved pricing settings with the saved configuration.</p><div className="mt-6 flex flex-wrap justify-end gap-3"><Button variant="secondary" onClick={() => setConfirmRefresh(false)}>Keep editing</Button><Button onClick={() => { setConfirmRefresh(false); void loadData(); }}>Discard & refresh</Button></div></Dialog>}
+  </div>;
 };
