@@ -1,5 +1,7 @@
 # Architecture review evidence
 
+Historical review from 2026-10-08. For current source-confirmed status and executed checks, see [the 2026-10-09 architecture audit](ARCHITECTURE_AUDIT.md). In particular, the candidate-set and budget-propagation findings below were subsequently addressed by the deterministic intent path; final quote validation still has gaps.
+
 Reviewed 2026-10-08 against the local AgentPay_Nexus checkout. The resume was read locally to position this project; its claims were not independently verified.
 
 ## Portfolio story

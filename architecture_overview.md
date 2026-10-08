@@ -1,6 +1,6 @@
 # AgentPay Nexus architecture
 
-Updated 2026-10-08. [Findings](docs/REVIEW_FINDINGS.md) describe current defects; [the roadmap](PROJECT_BLUEPRINT.md) defines implementation order.
+Updated 2026-10-09. [The implementation specification](docs/PROJECT_SPECIFICATION.md) describes the actual APIs, data model, and orchestration branches. [The current audit](docs/ARCHITECTURE_AUDIT.md) records architecture coverage and verified checks; [the roadmap](PROJECT_BLUEPRINT.md) defines implementation order. The target system below remains planned.
 
 ## Current system
 
