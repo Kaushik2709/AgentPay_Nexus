@@ -1,144 +1,206 @@
-# AgentPay Nexus
+﻿# AgentPay Nexus
 
-A policy-controlled commerce prototype that turns a purchase request into catalog items, a merchant quote, human approval when required, and Razorpay test checkout—with a readable decision trail.
+**Policy-controlled commerce orchestration with authenticated users, explainable purchase decisions, and verified Razorpay test payments.**
 
-**Status:** local portfolio prototype; architecture partially implemented. Reviewed 2026-10-09. Frontend lint, type checking, production build, and all 14 isolated backend tests passed. Payment concurrency, idempotency, access control, and durable workflow recovery remain incomplete. See [the architecture audit](docs/ARCHITECTURE_AUDIT.md).
+AgentPay Nexus turns a natural-language purchase request into catalog selection, merchant pricing, spending-policy checks, optional human approval, and checkout. Its engineering focus is making the purchase flow safer to retry, easier to inspect, and consistent when inventory, approvals, or payment events change.
 
-## Why this project exists
+Built with **Next.js, TypeScript, Better Auth, FastAPI, SQLAlchemy, SQLite, and Razorpay**. This is a local, single-merchant portfolio prototype using Razorpay test mode.
 
-A buyer needs suitable products within a budget. A merchant wants profitable pricing. An operator needs to review exceptions and understand failures. AgentPay models these competing concerns in a single-merchant purchasing workflow, with computer equipment as the primary demonstration.
+## What this project improves
 
-The engineering focus is separating product selection, pricing, policy, human decisions, checkout preparation, and payment verification. Local pricing savings and dashboard records are demo data; no real revenue, business uplift, or performance benchmark is claimed.
+| Engineering problem | Implemented improvement | Evidence or observable outcome |
+| --- | --- | --- |
+| Requests can select unrelated products or misinterpret a budget. | Catalog-grounded parsing, specification matching, exclusions, strict-item rules, and clarification for unsupported requests. | Regression tests cover selection, budget parsing, quantities, stock, and clarification before payment side effects. |
+| Browser-supplied identities can expose another user's records. | Better Auth sessions, a signed backend proxy, server-enforced permissions, and user-owned policies, approvals, and orders. | Tests reject forged and stale identities; browser checks verify account isolation. |
+| Retries can create duplicate orders or inventory holds. | Persisted workflow idempotency, server-owned quotes, and transactional stock reservations. | Tests replay requests, reuse checkout orders, and prevent two reservations of the last unit. |
+| Checkout callbacks can be mistaken for completed payments. | Server-side signatures and provider capture validation, including order ID, amount, and currency. | A Razorpay sandbox payment was completed in the browser, verified, and retained its paid status after refresh. |
+| Duplicate payment events can repeat settlement effects. | Payment-event deduplication and transactional settlement with audit writes. | Tests exercise duplicate and concurrent capture, incorrect payment details, and non-capture events. |
+| Approval conditions can change while a decision is pending. | Ownership, quote expiry, current policy, price-change, budget, and stock checks before checkout; authenticator verification for high-value approvals. | Tests cover expired quotes, insufficient adjustments, ownership failures, and high-value gates. |
+| Provider failures and expired holds can leave misleading state. | Explicit reconciliation states, periodic capture checks for known provider orders, and expired-reservation release. | Tests check provider failure and late capture after stock release, which requires review. |
+| Capped layouts waste desktop space and stack panels on laptops. | Fluid workspace width and container-based buyer layouts, with readable form widths on wide screens. | Browser checks from 375px to 2,560px found no page-level horizontal overflow on buyer, seller, and policy screens. |
 
-## What is implemented
+These are implementation and correctness improvements. Revenue uplift, conversion gains, latency reductions, and production scale have not been measured.
 
-- Five Next.js workspaces: buyer, merchant, policy/approvals, audit, and scenario lab.
-- FastAPI and Pydantic APIs with SQLAlchemy and local SQLite persistence.
-- Deterministic catalog-grounded intent parsing, exclusions, supported specs, one item per requested family, and conservative INR budget handling.
-- Four merchant pricing strategies, tiered policy evaluation, and persisted human approval records.
-- Razorpay order SDK integration, provider browser checkout, and server HMAC signature verification.
-- SHA-256 hash-linked audit entries and a chain verification endpoint.
+## Architecture and code flow
 
-The coordinator uses sequential Python calls inside an HTTP request. LangGraph, durable checkpoints, a worker queue, event streaming, PostgreSQL, and a protocol-conformant MCP server are **planned**. Optional Hugging Face helpers exist but are not invoked by the current buyer request path. Order creation prepares checkout; it does not complete payment. The audit log offers limited tamper evidence, not blockchain immutability. Subscription strategies illustrate pricing; mandates and fulfillment are absent.
-
-## Orchestration at a glance
-
-~~~mermaid
+```mermaid
 flowchart TD
-    UI[Next.js buyer workspace] --> API[FastAPI purchase request]
-    API --> S[Sequential commerce supervisor]
-    S --> B[Buyer intent and grounded selection]
-    B --> C{Selection valid?}
-    C -->|No| CL[Clarify or report unavailable inventory]
-    C -->|Yes| M[Merchant quote]
-    M --> SH[Buyer shield and optional quote revision]
-    SH --> P[Policy evaluation]
-    P --> G{Approval required?}
-    G -->|Yes| H[Persist human gate and return]
-    H --> D{Human decision via resume API}
-    D -->|Reject| R[Persist rejection]
-    D -->|Approve or adjust| O[Prepare payment order]
-    G -->|No| O
-    O --> A[Persist order and audit; return checkout payload]
-    A --> RP[Razorpay test checkout]
-    RP --> V[Server signature verification and local settlement]
-    V --> DB[(SQLite orders, inventory and audit)]
-~~~
+    U[Browser workspace] --> A[Next.js and Better Auth session]
+    A --> B[Authenticated proxy with signed identity]
+    B --> F[FastAPI role and ownership checks]
+    F --> S[Commerce supervisor]
+    S --> I[Buyer intent and catalog selection]
+    I --> Q[Merchant pricing and persisted quote]
+    Q --> P[Spending policy and buyer intent checks]
+    P --> H{Human approval required?}
+    H -->|Yes| G[Persist gate and revalidate on approval]
+    H -->|No| R[Reserve stock and prepare checkout]
+    G -->|Approved| R
+    R --> C[Razorpay test checkout]
+    C --> V[Verify signature and captured payment]
+    W[Signed webhook or reconciliation] --> V
+    V --> D[(Orders, inventory, payment events, audit)]
+```
 
-This is a simplified normal-path diagram. The [full orchestration specification](docs/PROJECT_SPECIFICATION.md#current-orchestration) also shows clarification, scripted failure, placeholder-order rejection, and payment-error branches. Writes commit independently; the diagram does not establish atomic transactions.
+The browser calls `/api/backend/*` on Next.js. The proxy verifies the session and signs the request identity before forwarding it to FastAPI. Authentication and commerce use separate local databases.
 
-## Documentation for reviewers
+The supervisor coordinates sequential Python components. The active purchase path uses deterministic catalog-grounded parsing; optional AI helpers are separate from the core runtime. LangGraph, a worker queue, and a protocol-conformant MCP server are future work.
 
-| Document | Purpose |
-| --- | --- |
-| [Implementation specification](docs/PROJECT_SPECIFICATION.md) | Stack, roles/screens, detailed orchestration, business rules, data model, API inventory, status semantics, and repository guide |
-| [Architecture audit](docs/ARCHITECTURE_AUDIT.md) | Implementation coverage, prioritized source-confirmed gaps, executed checks, and acceptance criteria |
-| [Architecture overview](architecture_overview.md) | Current topology and explicitly planned durable architecture |
-| [Product requirements](PRD.md) | Target business scope and acceptance rules |
-| [Six-phase blueprint](PROJECT_BLUEPRINT.md) | Ordered implementation roadmap |
-| [Recruiter walkthrough](script.md) | Demonstration narrative |
-| [Query regression review](docs/QUERY_TEST_REVIEW.md) | Earlier custom-query evidence and parser limits |
-| [UI review](docs/UI_REVIEW.md) | Earlier browser verification record |
+## Features
+
+- **Buyer workspace:** purchase requests, quotes, policy decisions, workflow traces, order history, and checkout recovery.
+- **Merchant operations:** inventory controls, margin constraints, four pricing strategies, and recorded commerce metrics.
+- **Policies and approvals:** per-user purchase limits, rolling daily limits, permitted categories, value-add preferences, and an approval inbox.
+- **Account security:** email/password authentication, database-backed auth rate limits, TOTP enrollment, recovery codes, and short-lived high-value authorization.
+- **Admin tools:** hash-linked audit inspection and verification, plus scripted failure scenarios.
+- **Payment reliability:** integer-paise calculations in the core commerce flow, persisted quotes and reservations, idempotent retries, signed webhooks, and capture validation.
+
+New accounts are buyers. Seller and admin access is assigned using immutable Better Auth user IDs in server-side configuration. Sellers currently retain buyer features, and merchant operations share one merchant catalog.
+
+## Edge cases handled
+
+- Ambiguous requests, unsupported quantities, excluded products, incompatible specifications, and unavailable stock.
+- Invalid budgets, malformed payloads, invalid pricing strategies, and unsupported scenario IDs.
+- Replayed workflows and conflicting reuse of an idempotency key.
+- Last-unit reservation contention and expiry of inventory holds.
+- Expired quotes, changed policies, insufficient approval adjustments, and cross-user access attempts.
+- Missing, forged, or stale identities and browser mutations with an invalid origin.
+- Unsigned or malformed webhooks, duplicate captures, and payment amount, currency, or order mismatches.
+- Checkout cancellation, refresh during an unpaid order, provider errors, and late capture after reservation expiry.
+
+Approval prepares checkout. Only a verified captured payment marks an order paid. Late capture without an intact reservation is recorded as `PAID_REQUIRES_REVIEW`.
 
 ## Local setup
 
-Run commands from the repository root initially. Use Python 3.11+ and a Node release satisfying the installed Next.js package requirements (Node 20.9+ minimum). Python dependencies currently use unpinned lower bounds; an installation may differ from the reviewed environment.
+Use **Node.js 24** for the TypeScript-importing demo seed script and **Python 3.11+**. Commands below use PowerShell. Preserve existing environment files rather than overwriting them.
 
-Backend, in one PowerShell terminal:
+### Backend
 
-~~~powershell
+```powershell
 cd server
 python -m venv venv
 .\venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+pip install -r requirements.lock
 Copy-Item .env.example .env
-# Edit server/.env with your own Razorpay TEST credentials before provider checkout.
+```
+
+Edit `server/.env`: set a random `BACKEND_AUTH_SECRET` of at least 32 characters and your own Razorpay **test** key ID, key secret, and webhook secret. Both database URLs must point to the same commerce database.
+
+Generate each secret independently:
+
+```powershell
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+Start from `server/` so relative database paths remain consistent:
+
+```powershell
 uvicorn app.main:app --host 127.0.0.1 --port 8000
-~~~
+```
 
-Frontend, in a second terminal from the repository root:
+Startup initializes the local catalog and order-maintenance task. `requirements.lock` records validated Windows dependency versions; `requirements-ai.txt` contains optional AI dependencies.
 
-~~~powershell
+### Frontend
+
+In a second terminal, from the repository root:
+
+```powershell
 cd client
 npm ci
-npm run dev
-~~~
+Copy-Item .env.example .env.local
+```
 
-Open http://localhost:3000. Backend API documentation: http://127.0.0.1:8000/docs; health metadata: http://127.0.0.1:8000/api/health. Backend startup creates/seeds the local database. Run backend commands from server/ so the relative database path is consistent. Keep an existing .env rather than copying over it.
-
-Optional client configuration in client/.env.local:
-
-~~~dotenv
-NEXT_PUBLIC_API_URL=http://127.0.0.1:8000/api
-~~~
-
-Server settings in server/.env:
+Configure `client/.env.local`:
 
 | Variable | Purpose |
 | --- | --- |
-| RAZORPAY_KEY_ID | Your provider test key ID |
-| RAZORPAY_KEY_SECRET | Server-only provider secret |
-| RAZORPAY_WEBHOOK_SECRET | Server-only webhook signing secret |
-| DATABASE_URL | Async SQLite connection; default sqlite+aiosqlite:///./agentpay.db |
-| SYNC_DATABASE_URL | Synchronous connection to the same database; default sqlite:///./agentpay.db |
-| DEFAULT_MERCHANT_MARGIN_FLOOR | Fallback pricing floor setting; seeded merchant configuration also applies |
-| DEFAULT_MAX_TX_AMOUNT, DEFAULT_DAILY_VELOCITY_CAP | Declared configuration defaults; the current seed uses hardcoded caps instead |
-| PRICE_DRIFT_TOLERANCE_PCT | Stored setting; current policy evaluation does not enforce it |
+| `BETTER_AUTH_URL` | `http://localhost:3000` |
+| `BETTER_AUTH_SECRET` | Separately generated secret of at least 32 characters |
+| `BACKEND_AUTH_SECRET` | Exactly the same shared secret as the backend |
+| `BACKEND_URL` | `http://127.0.0.1:8000` |
+| `BETTER_AUTH_DATABASE` | Local auth database, default `auth.db` |
+| `SELLER_USER_IDS`, `ADMIN_USER_IDS` | Comma-separated Better Auth user IDs for privileged roles |
+| `NEXT_PUBLIC_DEMO_ACCOUNTS` | `true` only for the local example-account UI and seed script |
 
-No browser secret is required. Checkout receives the public key ID from the backend order response. Existing start.bat/start.sh are convenience launchers; the manual steps above make configuration explicit.
+```powershell
+npm run auth:migrate
+# Optional: requires the demo flag and a localhost auth URL.
+npm run auth:seed-demo
+npm run dev
+```
 
-## Five-minute local demonstration
+The seed script creates example accounts and adds the seller's user ID to `.env.local`. Run it before starting Next.js, or restart Next.js afterward.
 
-1. Open the buyer workspace and submit “Buy a 4K monitor and ergonomic keyboard under ₹25,000” with conversion_closer if selecting a strategy. Inspect selected products, quote, and returned trace.
-2. Submit “Buy two keyboards” to demonstrate clarification before quote/payment side effects.
-3. Lower the request budget to ₹15,000 for the monitor/keyboard request. Inspect the policy gate and reject it from the approval view.
-4. Inspect merchant inventory and the audit chain verification result.
-5. With your own server test credentials configured, prepare a new eligible purchase and open provider test checkout. Provider completion was not exercised in this audit.
+Open **http://localhost:3000**. Backend docs: **http://127.0.0.1:8000/docs**. Public health endpoint: **http://127.0.0.1:8000/api/health**. Protected commerce requests go through the Next.js proxy.
 
-Scenario lab requests illustrate branches. They do not prove concurrent stock reservation or financial rollback. Historical approvals/orders remain in the local database and can affect daily-spend gates.
+### Local example accounts
 
-## Checks
+| Role | Email | Password |
+| --- | --- | --- |
+| Buyer | `buyer@example.test` | `BuyerDemo!2026` |
+| Seller | `seller@example.test` | `SellerDemo!2026` |
 
-From client/:
+These are intentionally public local demo credentials. Account-security enrollment uses the login password; subsequent authenticator verification uses the enrolled app's code. Environment files, provider secrets, and runtime databases remain local.
 
-~~~powershell
+## Verification
+
+Latest local verification: **October 10, 2026**.
+
+| Check | Result |
+| --- | --- |
+| Isolated backend suite | 37 tests passed across intent, approval, authorization, inventory, idempotency, settlement, and route integration |
+| Backend route integration | Exercises all 20 backend routes; provider interactions use mocks in the isolated suite |
+| Better Auth integration test | Passed registration, session revocation, ownership, and TOTP checks in an ephemeral database |
+| Frontend lint and production build | Passed |
+| Browser permissions | Buyer/seller sign-in, restricted-route rejection, and user-owned record isolation checked |
+| Razorpay sandbox checkout | Captured payment verified and paid status preserved after refresh; cancellation left checkout unpaid and resumable |
+| Responsive browser checks | Buyer, seller, and policy screens checked from 375px to 2,560px; mobile navigation checked |
+
+```powershell
+# From server/
+.\venv\Scripts\python.exe -m unittest discover -s tests -p 'test_*.py' -v
+
+# From client/
+npm test
 npm run lint
-npx tsc --noEmit
 npm run build
-~~~
+```
 
-From server/:
+Sandbox checkout was a manual browser check, separate from the mocked regression suite. Public provider-to-localhost webhook delivery has not been verified. These checks establish local correctness for exercised cases, not production load capacity or exhaustive coverage.
 
-~~~powershell
-.\venv\Scripts\python.exe -m unittest discover -s tests -v
-~~~
+## Resume-ready project highlights
 
-The 14 isolated backend tests cover buyer intent, request validation, budget propagation, policy-cap enforcement, and mocked approval responses. They do not test provider settlement or transaction concurrency. The older server/test_backend.py uses configured integration resources; it is not an isolated CI suite. See [the dated audit](docs/ARCHITECTURE_AUDIT.md#checks-executed-in-this-review) for results and limits.
+Adapt these bullets to describe your own contribution:
 
-## Known limitations and publishing readiness
+- Built a full-stack commerce orchestration prototype with Next.js, FastAPI, and SQLAlchemy, connecting natural-language purchase requests to catalog-grounded selection, merchant pricing, policy approval, and Razorpay test checkout.
+- Integrated Better Auth with TOTP, session-based access, signed backend requests, and role-based permissions to protect user-owned policies, approvals, and orders.
+- Implemented idempotent purchase workflows, transactional stock reservations, and deduplicated payment settlement; added regression coverage for concurrent captures, last-unit contention, quote expiry, and payment mismatches.
+- Developed a 37-test backend suite with integration coverage across 20 API routes, alongside authentication tests and browser validation of sandbox payments, checkout recovery, and responsive layouts.
 
-The architecture is not perfectly implemented. Current blockers include server credential defaults, unsigned-webhook acceptance, repeatable settlement effects, non-atomic inventory updates, missing authentication/ownership, client-authoritative direct order amounts, and incomplete capture validation. Approval does not revalidate quote expiry or policy. Provider errors can generate placeholder orders; the browser rejects these, but the backend still persists them. Keep the current service local until these gaps are fixed.
+Test and route counts are verified scope metrics. Add performance or business-impact percentages only after collecting reproducible benchmarks or real usage data.
 
-Environment examples were sanitized during this review. Previously exposed credentials still require owner rotation and history cleanup before publication; deleting values from an example does not revoke them. Runtime credential defaults remain in server/app/config.py. Do not publish secrets, local .env files, or runtime databases. The root .gitignore excludes these runtime files, but ignores do not remove tracked content or earlier history.
+## Current boundaries and next steps
 
-The [audit](docs/ARCHITECTURE_AUDIT.md) records the findings; the [blueprint](PROJECT_BLUEPRINT.md) defines the remediation plan. This review made documentation/example changes only and did not push to GitHub, deploy a service, rotate credentials, or submit a payment.
+- **Scale:** single-merchant SQLite deployment. Move to PostgreSQL and test multi-process contention before scaling workloads.
+- **Recovery:** workflow records, quotes, approvals, and orders persist, but there is no general durable workflow engine. Provider failures without a known provider order ID can require manual reconciliation.
+- **Roles:** sellers also see personal purchasing and policy screens. Separate buyer and seller experiences further if the product requires exclusive roles.
+- **Audit:** hash-linked records provide local tamper evidence; external anchoring remains future work.
+- **AI:** the active parser is deterministic. Evaluate an LLM-assisted parser against existing regression cases before introducing model-based decisions.
+- **Commerce:** recurring-payment mandates, fulfillment, refunds, production payment operations, and multi-merchant tenancy are not implemented.
+
+## Repository guide
+
+| Path | Responsibility |
+| --- | --- |
+| `client/src/app/` | Workspace shell, auth handlers, backend proxy, and step-up route |
+| `client/src/components/` | Buyer, merchant, policy, security, audit, and checkout UI |
+| `client/src/lib/` | Authentication, browser API client, and helpers |
+| `server/app/agents/` | Selection, pricing, policy, and orchestration |
+| `server/app/api/` | Validated commerce API routes |
+| `server/app/commerce.py` | Transaction and reservation helpers |
+| `server/app/razorpay/` | Provider order creation and verified settlement |
+| `server/app/maintenance.py` | Known-order reconciliation and reservation expiry |
+| `server/app/audit/` | Hash-linked audit ledger |
+| `server/tests/`, `client/tests/` | Regression and authentication tests |
+
+Earlier documents in `docs/`, `PRD.md`, and `PROJECT_BLUEPRINT.md` describe past snapshots or planned work and can contain gaps since addressed. This README summarizes the current implementation.
