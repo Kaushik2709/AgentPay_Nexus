@@ -50,6 +50,13 @@ class MerchantGrowthAgent:
             p = await CatalogService.get_product_by_sku(db, sku)
             if p:
                 requested_products.append(p)
+            else:
+                raise ValueError(f"Unknown requested SKU: {sku}")
+
+        if len(set(request.requested_skus)) != len(request.requested_skus):
+            raise ValueError("Duplicate SKUs are unsupported. Specify explicit quantities instead.")
+        if not requested_products or any(p.stock_quantity <= 0 for p in requested_products):
+            raise ValueError("Every requested product must be in stock.")
 
         if not requested_products:
             # Return empty baseline quote
@@ -75,6 +82,9 @@ class MerchantGrowthAgent:
         strict_items = request.buyer_context.strict_items_only
         allow_upsell = request.buyer_context.allow_autonomous_upsell
         forced_model = request.preferred_growth_model
+        enabled = json.loads(merchant.active_growth_models) if merchant else ["quality_upgrade", "conversion_closer", "bulk_subscription", "value_services"]
+        if forced_model and forced_model not in enabled:
+            raise ValueError("This pricing strategy is disabled by the merchant.")
 
         # Calculate base metrics
         base_subtotal = sum(p.retail_price for p in requested_products)
@@ -91,20 +101,24 @@ class MerchantGrowthAgent:
             elif strict_items:
                 # If strict items and headroom > 1500, attempt vertical quality upgrade
                 can_upgrade = any(p.upgrade_to_sku for p in requested_products)
-                if can_upgrade and budget_headroom >= 1500:
+                if can_upgrade and budget_headroom >= 1500 and allow_upsell:
                     selected_model = "quality_upgrade"
                 else:
                     # Conversion Closer gives instant checkout discount
                     selected_model = "conversion_closer"
             else:
                 # Not strict items
-                if budget_headroom >= 2500 and any(p.upgrade_to_sku for p in requested_products):
+                if allow_upsell and budget_headroom >= 2500 and any(p.upgrade_to_sku for p in requested_products):
                     selected_model = "quality_upgrade"
                 elif any(p.warranty_price and p.warranty_price > 0 for p in requested_products):
                     selected_model = "value_services"
                 else:
                     selected_model = "conversion_closer"
 
+        if selected_model not in enabled:
+            selected_model = "conversion_closer" if "conversion_closer" in enabled else "standard"
+        if selected_model == "quality_upgrade" and not allow_upsell:
+            selected_model = "conversion_closer" if "conversion_closer" in enabled else "standard"
         quote_items: List[QuoteItem] = []
         discount_total = 0.0
         warranty_total = 0.0
@@ -126,7 +140,7 @@ class MerchantGrowthAgent:
                         
                         # Verify margin floor
                         prospective_margin = (upgrade_unit_price - upgraded_prod.cost_price) / upgrade_unit_price
-                        if (prospective_margin >= (margin_floor - 0.001)) and (base_subtotal - p.retail_price + upgrade_unit_price) <= budget_cap:
+                        if (prospective_margin >= margin_floor) and (base_subtotal - p.retail_price + upgrade_unit_price) <= budget_cap:
                             quote_items.append(QuoteItem(
                                 sku=upgraded_prod.sku,
                                 name=upgraded_prod.name,
@@ -174,8 +188,8 @@ class MerchantGrowthAgent:
             available_margin_slack = max(0.0, current_margin - margin_floor)
             # Give 2.5% to 4% dynamic discount
             discount_pct = min(0.035, available_margin_slack * 0.5)
-            if discount_pct < 0.015:
-                discount_pct = 0.025  # Minimum 2.5% closer discount
+            max_discount = max(0.0, 1 - total_cost / (max(base_subtotal, 1.0) * (1 - margin_floor)))
+            discount_pct = min(discount_pct, max_discount)
             
             for p in requested_products:
                 item_discount = round(p.retail_price * discount_pct, 2)
@@ -272,9 +286,14 @@ class MerchantGrowthAgent:
             savings_breakdown = f"Protection Added: 2-Year Full Hardware Coverage (₹{int(warranty_fee)})"
 
         # Calculate final totals and gross margin as ratio e.g. 0.2046 (20.5%)
-        items_subtotal = sum(i.unit_price for i in quote_items)
+        if selected_model == "standard":
+            quote_items = [QuoteItem(sku=p.sku, name=p.name, unit_price=p.retail_price,
+                original_price=p.retail_price, category=p.category) for p in requested_products]
+        items_subtotal = sum(i.unit_price * i.quantity for i in quote_items)
         final_total = round(items_subtotal, 2)
         effective_margin = round((final_total - total_cost) / max(final_total, 1.0), 4)
+        if final_total <= 0 or effective_margin < margin_floor - 0.0001:
+            raise ValueError("No quote can satisfy the merchant margin floor. Adjust pricing or strategy.")
 
         quote_id = f"q_{uuid.uuid4().hex[:12]}"
         expires_at = (datetime.datetime.utcnow() + datetime.timedelta(minutes=15)).isoformat()

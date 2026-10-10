@@ -1,0 +1,6 @@
+# Optional generative/embedding helpers; the grounded purchase path does not load these.
+transformers>=4.38.0
+torch>=2.2.0
+langchain>=0.1.0
+langchain-huggingface>=0.1.0
+langchain-core>=0.1.0

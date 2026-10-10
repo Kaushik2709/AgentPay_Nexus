@@ -11,8 +11,8 @@ export const sections = [
   { id: "chaos", label: "Scenario lab", icon: Flame, description: "Explore scripted failure paths and compare expectations with recorded outcomes." },
 ] as const;
 export type SectionId = typeof sections[number]["id"];
-interface NavbarProps { activeTab: SectionId; setActiveTab: (tab: SectionId) => void; pendingHitlCount: number | null; }
-export function Navbar({ activeTab, setActiveTab, pendingHitlCount }: NavbarProps) {
+interface NavbarProps { activeTab: SectionId; setActiveTab: (tab: SectionId) => void; pendingHitlCount: number | null; isAdmin?: boolean; isSeller?: boolean; }
+export function Navbar({ activeTab, setActiveTab, pendingHitlCount, isAdmin = false, isSeller = false }: NavbarProps) {
   const [online, setOnline] = useState<boolean | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   useEffect(() => {
@@ -26,7 +26,7 @@ export function Navbar({ activeTab, setActiveTab, pendingHitlCount }: NavbarProp
     requestAnimationFrame(() => requestAnimationFrame(() => { document.getElementById("workspace")?.focus({ preventScroll: true }); window.scrollTo({ top: 0 }); }));
   }
   const nav = (mobile: boolean) => <nav aria-label={mobile ? "Mobile workspace sections" : "Workspace sections"} className="space-y-1.5">
-    {sections.map(({ id, label, icon: Icon }) => <button key={id} type="button" onClick={() => navigate(id)} aria-current={activeTab === id ? "page" : undefined}
+    {sections.filter(section => isAdmin || (isSeller && section.id === "merchant") || ["buyer", "policy"].includes(section.id)).map(({ id, label, icon: Icon }) => <button key={id} type="button" onClick={() => navigate(id)} aria-current={activeTab === id ? "page" : undefined}
       className={`flex min-h-12 w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium transition-colors ${mobile ? activeTab === id ? "bg-blue-50 text-blue-700" : "text-slate-600 hover:bg-slate-50" : activeTab === id ? "bg-white/10 text-white ring-1 ring-white/10" : "text-slate-300 hover:bg-white/5 hover:text-white"}`}>
       <Icon aria-hidden className={`size-[18px] ${activeTab === id && !mobile ? "text-blue-300" : ""}`} /><span className="flex-1">{label}</span>
       {id === "policy" && pendingHitlCount !== null && pendingHitlCount > 0 && <span className={`rounded px-1.5 py-0.5 text-xs ${mobile ? "bg-amber-50 text-amber-800" : "bg-amber-300/10 text-amber-200"}`}>{pendingHitlCount}</span>}

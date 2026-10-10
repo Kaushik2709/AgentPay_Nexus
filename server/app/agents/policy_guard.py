@@ -25,8 +25,8 @@ class PolicyGuardAgent:
         """Calculates total spend by user in the rolling past 24 hours from confirmed orders."""
         one_day_ago = datetime.datetime.utcnow() - datetime.timedelta(days=1)
         query = select(func.sum(Order.total_amount)).where(
-            Order.buyer_agent_id.like(f"%{user_id}%") | (Order.buyer_agent_id == "agent_aarav_99"),
-            Order.status == "PAID",
+            Order.buyer_agent_id == user_id,
+            Order.status.in_(["PAID", "CREATED", "CREATING", "RECONCILIATION_REQUIRED"]),
             Order.created_at >= one_day_ago
         )
         res = await db.execute(query)
@@ -38,7 +38,8 @@ class PolicyGuardAgent:
         db: AsyncSession,
         quote: DynamicQuoteResponse,
         user_id: str = "aarav_buyer_01",
-        user_override_budget: float = None
+        user_override_budget: float = None,
+        create_gate: bool = True
     ) -> PolicyEvaluationResponse:
         # Load user policy
         pol_query = select(Policy).where(Policy.user_id == user_id)
@@ -79,7 +80,7 @@ class PolicyGuardAgent:
         # Rule 4: Category Whitelist
         for item in quote.items:
             cat = getattr(item, 'category', 'general')
-            if cat not in whitelist and cat != "services" and cat != "general":
+            if cat not in whitelist:
                 violations.append(f"UNAPPROVED_CATEGORY: Item '{item.name}' belongs to unapproved domain '{cat}'.")
                 is_tier_2_gated = True
 
@@ -116,12 +117,12 @@ class PolicyGuardAgent:
             "discount_savings": quote.discount_total,
             "violations": violations,
             "reasoning": (
-                "Transaction passed all bounded safety rules. Autonomous zero-friction settlement granted."
+                "Purchase passed the spending rules. Checkout is approved; payment still requires verification."
                 if can_proceed else
                 f"Transaction requires human authorization due to {len(violations)} policy boundary trigger(s)."
             ),
             "recommendation": (
-                "Ready for instant settlement."
+                "Proceed to checkout. A receipt appears after the payment is verified."
                 if can_proceed else
                 "Review the explainability breakdown and authorize 1-click escalation."
             )
@@ -129,7 +130,7 @@ class PolicyGuardAgent:
 
         # If HITL required, create entry in HITLApprovalQueue
         hitl_gate_id = None
-        if hitl_required:
+        if hitl_required and create_gate:
             hitl_gate_id = f"gate_{uuid.uuid4().hex[:12]}"
             queue_entry = HITLApprovalQueue(
                 id=hitl_gate_id,

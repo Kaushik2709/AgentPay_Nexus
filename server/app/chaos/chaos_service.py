@@ -19,10 +19,10 @@ class ChaosResilienceService:
         supervisor = CommerceSupervisorAgent()
 
         if scenario_id == "budget_breach":
-            # Scenario 1: User asks for 4K monitor & ergonomic keyboard with an artificially low budget (₹15,000)
+            # Each item fits discovery; the combined cart exceeds the budget.
             req = AgentWorkflowRequest(
                 user_goal="Buy me a 4K monitor and ergonomic keyboard",
-                budget_cap_inr=15000.0,  # Below combined price (~₹23,000)
+                budget_cap_inr=20000.0,  # Below combined price (~₹23,000)
                 strict_items_only=False,
                 allow_autonomous_upsell=False
             )
@@ -42,7 +42,7 @@ class ChaosResilienceService:
         elif scenario_id == "strict_upsell_rejection":
             # Scenario 3: User specifies strict items only, Merchant attempts value services upsell, Buyer AI shields user
             req = AgentWorkflowRequest(
-                user_goal="Buy 4K UHD monitor ONLY, strict essentials",
+                user_goal="Buy only a 4K UHD monitor",
                 budget_cap_inr=25000.0,
                 strict_items_only=True,  # Shield active!
                 allow_autonomous_upsell=False,

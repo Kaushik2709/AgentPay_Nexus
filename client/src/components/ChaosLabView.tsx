@@ -41,7 +41,7 @@ export const ChaosLabView: React.FC<ChaosLabViewProps> = ({ onScenarioRun }) => 
   };
 
   const descriptions: Record<string, { title: string; objective: string; expected: string }> = {
-    budget_breach: { title: "Budget cap breach", objective: "Request a monitor and keyboard with a ₹15,000 spending cap.", expected: "Inspect whether the returned policy decision requires human approval." },
+    budget_breach: { title: "Budget cap breach", objective: "Request a monitor and keyboard with a ₹20,000 spending cap.", expected: "Inspect whether the returned policy decision requires human approval." },
     stock_race_condition: { title: "Stock unavailable", objective: "Explore a scripted stock-unavailable path before checkout.", expected: "Inspect the recorded failure and inventory response. This does not prove atomic payment rollback." },
     strict_upsell_rejection: { title: "Strict item protection", objective: "Request only specified items while the merchant proposes an add-on.", expected: "Inspect the buyer’s rejection and the merchant’s alternative pricing proposal." },
   };

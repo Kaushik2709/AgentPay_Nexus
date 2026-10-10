@@ -46,6 +46,7 @@ export function RazorpayModal({ isOpen, onClose, orderData, onSuccess }: Props) 
           try {
             const result = await api.verifyPayment(response.razorpay_order_id, response.razorpay_payment_id, response.razorpay_signature);
             if (!result.success) throw new Error(result.message || "Payment verification failed.");
+            if (result.status !== "PAID") throw new Error(result.message || "Payment captured; fulfillment needs review.");
             setReceipt(result.digital_receipt);
             onSuccess(result.digital_receipt);
           } catch (err) { setError("Checkout returned a payment, but server verification failed. Do not pay again; inspect the order. " + errorMessage(err)); }

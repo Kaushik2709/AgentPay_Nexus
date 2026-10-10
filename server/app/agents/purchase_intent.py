@@ -76,7 +76,7 @@ def select_products(products, intent):
     for family in requested:
         candidates = [p for p in available if family in families(p.name)]
         # Honor explicit hardware constraints and named variants that the catalog supports.
-        constraints = re.findall(r"\b(?:4k|1080p|1440p|120hz|wireless|anc|ddr[45]|z790|lga1700|usb[ -]?c)\b", query)
+        constraints = re.findall(r"\b(?:4k|1080p|1440p|\d+\s*hz|wireless|anc|ddr[45]|z790|lga1700|usb[ -]?c)\b", query)
         family_query = " ".join(c for c in re.split(r"\band\b|;|\+", query) if family in families(c))
         constraints = [c for c in constraints if c in family_query]
         variants = [word for word in ("creator", "ultraview", "ergotype", "mastergrip", "studiomaster", "gigabyte", "aorus", "elite", "xtreme", "pro", "split", "alice") if re.search(r"\b" + word + r"\b", family_query)]

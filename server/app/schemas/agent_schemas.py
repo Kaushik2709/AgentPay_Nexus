@@ -7,7 +7,7 @@ class CatalogQueryRequest(BaseModel):
     category: Optional[str] = None
     query_text: Optional[str] = None
     specs: Optional[Dict[str, Any]] = None
-    max_price_inr: Optional[float] = None
+    max_price_inr: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
     in_stock_only: bool = True
 
 class CatalogProductResponse(BaseModel):
@@ -18,7 +18,7 @@ class CatalogProductResponse(BaseModel):
     description: str
     specifications: Dict[str, Any]
     retail_price: float
-    cost_price: float
+    cost_price: Optional[float] = None
     stock_quantity: int
     upgrade_to_sku: Optional[str] = None
     upgrade_bundle_discount: Optional[float] = 0.0
@@ -31,9 +31,9 @@ class CatalogProductResponse(BaseModel):
 class QuoteItem(BaseModel):
     sku: str
     name: str
-    quantity: int = 1
-    unit_price: float
-    original_price: float
+    quantity: int = Field(default=1, gt=0, le=100)
+    unit_price: float = Field(ge=0, allow_inf_nan=False)
+    original_price: float = Field(ge=0, allow_inf_nan=False)
     is_upgraded: bool = False
     upgraded_from_sku: Optional[str] = None
     is_warranty: bool = False
@@ -50,7 +50,7 @@ class DynamicQuoteRequest(BaseModel):
     buyer_agent_id: str = "agent_aarav_99"
     requested_skus: List[str]
     buyer_context: BuyerContext
-    preferred_growth_model: Optional[str] = None  # None = dynamic auto-selection
+    preferred_growth_model: Optional[Literal["quality_upgrade", "conversion_closer", "bulk_subscription", "value_services"]] = None
 
 class DynamicQuoteResponse(BaseModel):
     quote_id: str
@@ -85,18 +85,18 @@ class PolicyEvaluationResponse(BaseModel):
     hitl_gate_id: Optional[str] = None
 
 class PolicyUpdateRequest(BaseModel):
-    max_tx_amount: Optional[float] = None
-    daily_velocity_cap: Optional[float] = None
+    max_tx_amount: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
+    daily_velocity_cap: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
     category_whitelist: Optional[List[str]] = None
     allow_autonomous_upsell: Optional[bool] = None
-    price_drift_tolerance_pct: Optional[float] = None
+    price_drift_tolerance_pct: Optional[float] = Field(default=None, ge=0, le=100, allow_inf_nan=False)
 
 # ----------------- Razorpay Schemas -----------------
 
 class RazorpayCreateOrderRequest(BaseModel):
     quote_id: str
-    amount_inr: float
-    currency: str = "INR"
+    amount_inr: float = Field(gt=0, allow_inf_nan=False)
+    currency: Literal["INR"] = "INR"
     buyer_agent_id: str
     receipt_prefix: str = "rcpt_nexus"
     notes: Optional[Dict[str, Any]] = None
@@ -131,7 +131,7 @@ class PaymentVerificationResponse(BaseModel):
 class HITLActionRequest(BaseModel):
     gate_id: str
     action: Literal["APPROVE", "REJECT", "ADJUST_BUDGET"]
-    adjusted_budget: Optional[float] = None
+    adjusted_budget: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
     comment: Optional[str] = None
 
 class HITLActionResponse(BaseModel):
@@ -194,4 +194,4 @@ class AuditVerificationResponse(BaseModel):
     message: str
 
 class ChaosScenarioRequest(BaseModel):
-    scenario_id: str  # "budget_breach", "stock_race_condition", "strict_upsell_rejection"
+    scenario_id: Literal["budget_breach", "stock_race_condition", "strict_upsell_rejection"]

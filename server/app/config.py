@@ -15,9 +15,9 @@ class Settings(BaseSettings):
     SYNC_DATABASE_URL: str = os.getenv("SYNC_DATABASE_URL", "sqlite:///./agentpay.db")
     
     # Razorpay Test Mode Credentials
-    RAZORPAY_KEY_ID: str = os.getenv("RAZORPAY_KEY_ID", "rzp_test_TUTtQXLU7uisGX")
-    RAZORPAY_KEY_SECRET: str = os.getenv("RAZORPAY_KEY_SECRET", "v8x9DUcOfGgUyJwOZ6GeOihJ")
-    RAZORPAY_WEBHOOK_SECRET: str = os.getenv("RAZORPAY_WEBHOOK_SECRET", "nexus_webhook_sec_44332211")
+    RAZORPAY_KEY_ID: str = os.getenv("RAZORPAY_KEY_ID", "")
+    RAZORPAY_KEY_SECRET: str = os.getenv("RAZORPAY_KEY_SECRET", "")
+    RAZORPAY_WEBHOOK_SECRET: str = os.getenv("RAZORPAY_WEBHOOK_SECRET", "")
     
     # Merchant Defaults
     DEFAULT_MERCHANT_MARGIN_FLOOR: float = float(os.getenv("DEFAULT_MERCHANT_MARGIN_FLOOR", "0.20"))

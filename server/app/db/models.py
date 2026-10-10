@@ -93,3 +93,40 @@ class HITLApprovalQueue(Base):
     explainability_card_json = Column(Text, nullable=False, default="{}")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     resolved_at = Column(DateTime, nullable=True)
+
+class Quote(Base):
+    __tablename__ = "quotes"
+    id = Column(String(64), primary_key=True)
+    buyer_agent_id = Column(String(64), nullable=False, index=True)
+    amount_paise = Column(Integer, nullable=False)
+    budget_paise = Column(Integer, nullable=False)
+    data_json = Column(Text, nullable=False)
+    checkout_json = Column(Text, nullable=True)
+    status = Column(String(32), nullable=False, default="QUOTED")
+    expires_at = Column(DateTime, nullable=False)
+
+class StockReservation(Base):
+    __tablename__ = "stock_reservations"
+    id = Column(Integer, primary_key=True)
+    order_id = Column(String(64), nullable=False, index=True)
+    sku = Column(String(64), nullable=False)
+    quantity = Column(Integer, nullable=False)
+    status = Column(String(32), nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+
+class PaymentEvent(Base):
+    __tablename__ = "payment_events"
+    id = Column(String(128), primary_key=True)
+    payment_id = Column(String(64), nullable=False, unique=True)
+    order_id = Column(String(64), nullable=False)
+    amount_paise = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+class WorkflowRun(Base):
+    __tablename__ = "workflow_runs"
+    id = Column(String(128), primary_key=True)
+    buyer_agent_id = Column(String(64), nullable=False, index=True)
+    request_hash = Column(String(64), nullable=False)
+    status = Column(String(32), nullable=False, default="RUNNING")
+    result_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)

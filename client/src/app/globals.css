@@ -27,7 +27,7 @@
   ::selection { background: #dbeafe; }
 }
 @layer components {
-  .nexus-container { width: min(100% - 3rem, 1400px); margin-inline: auto; }
+  .nexus-container { width: calc(100% - 3rem); min-width: 0; margin-inline: auto; }
   .nexus-card { min-width: 0; background: white; border: 1px solid #e2e8f0; border-radius: 16px; box-shadow: 0 2px 4px #0f172a04, 0 8px 24px #0f172a03; }
   .nexus-input, .nexus-select { width: 100%; max-width: 100%; min-height: 44px; border: 1px solid #cbd5e1; background: white; color: #0f172a; border-radius: 10px; padding: 12px; font-size: 14px; transition: border-color 140ms, box-shadow 140ms; }
   .nexus-input::placeholder { color: #64748b; }
@@ -66,8 +66,9 @@
 }
 .workspace-content { container-type: inline-size; }
 .panel-heading > div:first-child { min-width: 0; flex: 1; }
-.purchase-grid { display: grid; grid-template-columns: 1fr; gap: 24px; align-items: start; }
-@container (min-width: 1040px) { .purchase-grid { grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr); } }
+.purchase-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; align-items: start; }
+@container (min-width: 880px) { .purchase-grid { grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr); } }
+@container (min-width: 1500px) { .purchase-grid { grid-template-columns: minmax(0, 640px) minmax(0, 1fr); } }
 .nexus-card .grid > *, .nexus-card .flex > div { min-width: 0; }
 .nexus-card { overflow-wrap: anywhere; }
 .nexus-card pre { overflow-wrap: normal; }

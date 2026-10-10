@@ -15,10 +15,6 @@ def seed_database():
         existing_products = db.query(Product).count()
         if existing_products > 0:
             print("[SEED] Database already populated with real catalog data.")
-            merchant = db.query(Merchant).filter(Merchant.id == "merchant_techgear_01").first()
-            if merchant:
-                merchant.margin_floor_pct = 0.20
-                db.commit()
             return
 
         print("[SEED] Seeding real production catalog, merchants, policies, and genesis audit block...")

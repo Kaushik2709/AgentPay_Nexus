@@ -1,5 +1,5 @@
 import json
-from typing import Optional, List
+from typing import Optional, List, Literal
 from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -28,7 +28,7 @@ async def get_merchant_dashboard(
 
     total_revenue = sum(o.total_amount for o in paid_orders)
     total_orders_count = len(paid_orders)
-    avg_order_value = (total_revenue / total_orders_count) if total_orders_count > 0 else 23500.0
+    avg_order_value = (total_revenue / total_orders_count) if total_orders_count > 0 else 0.0
     total_discounts_given = sum(o.discount_amount for o in paid_orders)
 
     # Product count and inventory health
@@ -75,8 +75,8 @@ async def get_merchant_dashboard(
 
 @router.post("/config")
 async def update_merchant_config(
-    margin_floor_pct: Optional[float] = Body(None),
-    active_growth_models: Optional[List[str]] = Body(None),
+    margin_floor_pct: Optional[float] = Body(None, ge=0.05, le=0.50, allow_inf_nan=False),
+    active_growth_models: Optional[List[Literal["quality_upgrade", "conversion_closer", "bulk_subscription", "value_services"]]] = Body(None),
     merchant_id: str = "merchant_techgear_01",
     db: AsyncSession = Depends(get_db)
 ):

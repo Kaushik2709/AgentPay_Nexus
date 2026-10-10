@@ -38,9 +38,9 @@ async def list_all_products(db: AsyncSession = Depends(get_db)):
 @router.patch("/products/{sku}", response_model=CatalogProductResponse)
 async def update_product_inventory(
     sku: str,
-    stock_quantity: Optional[int] = Body(None),
-    retail_price: Optional[float] = Body(None),
-    cost_price: Optional[float] = Body(None),
+    stock_quantity: Optional[int] = Body(None, ge=0),
+    retail_price: Optional[float] = Body(None, gt=0, allow_inf_nan=False),
+    cost_price: Optional[float] = Body(None, ge=0, allow_inf_nan=False),
     db: AsyncSession = Depends(get_db)
 ):
     """Updates product stock and pricing in real time."""

@@ -12,6 +12,9 @@ from app.razorpay.settlement_agent import RazorpaySettlementAgent
 from app.audit.ledger import AuditLedgerEngine
 from app.catalog.catalog_service import CatalogService
 from app.db.models import HITLApprovalQueue, Order, Product
+from app.db.models import Quote, Policy
+from app.auth import buyer_id, user_id
+from app.commerce import persist_quote, write_transaction, expire_reservations
 from app.schemas.agent_schemas import (
     AgentWorkflowRequest,
     AgentWorkflowResponse,
@@ -30,7 +33,7 @@ class CommerceSupervisorAgent:
     Controls the state transitions, worker routing, HITL interrupt gates, and atomic rollbacks.
     """
     def __init__(self):
-        self.buyer_agent = BuyerAgent(agent_id="agent_aarav_99")
+        self.buyer_agent = BuyerAgent(agent_id=buyer_id())
         self.merchant_agent = MerchantGrowthAgent(merchant_id="merchant_techgear_01")
         self.policy_guard = PolicyGuardAgent(agent_id="policy_guard_sentinel")
         self.settlement_agent = RazorpaySettlementAgent()
@@ -77,6 +80,9 @@ class CommerceSupervisorAgent:
         if parsed_intent.get("quantity_unsupported") or parsed_intent.get("unresolved_clauses") or set(parsed_intent.get("requested_families", [])) & set(parsed_intent.get("excluded_families", [])):
             add_trace("BuyerAgent", "VALIDATE_PURCHASE_INTENT", "GATED", "Clarify the request before pricing or checkout.", parsed_intent)
             return AgentWorkflowResponse(workflow_id=workflow_id, user_goal=request.user_goal, status="NEEDS_CLARIFICATION", steps=steps, explainability_card={"title": "Purchase request needs clarification", "status": "NEEDS_CLARIFICATION", "reasoning": "Specify supported catalog products without conflicting exclusions. This workflow currently supports one unit per requested product family; multiple-unit requests cannot be fulfilled safely.", "recommendation": "Request one item per family, or use an exact catalog SKU. No quote or payment order was created."})
+        if db is not None:
+            await write_transaction(db)
+            await expire_reservations(db)
         discovered_products = await self.buyer_agent.execute_catalog_discovery(db, parsed_intent)
         if not discovered_products:
             add_trace(
@@ -113,12 +119,13 @@ class CommerceSupervisorAgent:
         # STEP 3: Dynamic Quote Generation (Merchant Growth Agent)
         # ----------------------------------------------------
         buyer_ctx = BuyerContext(
+            user_id=user_id(),
             budget_cap_inr=effective_budget,
             strict_items_only=strict_items,
             allow_autonomous_upsell=request.allow_autonomous_upsell
         )
         quote_req = DynamicQuoteRequest(
-            buyer_agent_id="agent_aarav_99",
+            buyer_agent_id=buyer_id(),
             requested_skus=found_skus,
             buyer_context=buyer_ctx,
             preferred_growth_model=request.force_growth_model
@@ -174,9 +181,12 @@ class CommerceSupervisorAgent:
         # ----------------------------------------------------
         # STEP 5: Policy Guard & HITL Gating
         # ----------------------------------------------------
+        if db is not None:
+            await persist_quote(db, quote, effective_budget)
         policy_result = await self.policy_guard.evaluate_quote(
             db=db,
             quote=quote,
+            user_id=user_id(),
             user_override_budget=effective_budget
         )
 
@@ -224,7 +234,7 @@ class CommerceSupervisorAgent:
                 policy_result=policy_result,
                 explainability_card=policy_result.explainability_card,
                 hitl_gate_id=policy_result.hitl_gate_id,
-                total_spent=quote.final_total,
+                total_spent=0.0,
                 total_saved=quote.discount_total
             )
 
@@ -275,7 +285,7 @@ class CommerceSupervisorAgent:
             quote_id=quote.quote_id,
             amount_inr=quote.final_total,
             currency="INR",
-            buyer_agent_id="agent_aarav_99",
+            buyer_agent_id=buyer_id(),
             notes={
                 "workflow_id": workflow_id,
                 "growth_model": quote.applied_growth_model,
@@ -283,6 +293,8 @@ class CommerceSupervisorAgent:
             }
         )
 
+        stored_quote = await db.get(Quote, quote.quote_id)
+        stored_quote.status = "CHECKOUT_READY"
         rzp_order = await self.settlement_agent.create_order(
             db=db,
             request=rzp_order_req,
@@ -307,7 +319,7 @@ class CommerceSupervisorAgent:
         audit_entry = await AuditLedgerEngine.append_entry(
             db=db,
             actor="CommerceSupervisor",
-            action="AUTONOMOUS_CHECKOUT_CONFIRMED",
+            action="CHECKOUT_PREPARED",
             payload={
                 "workflow_id": workflow_id,
                 "quote_id": quote.quote_id,
@@ -334,14 +346,14 @@ class CommerceSupervisorAgent:
         return AgentWorkflowResponse(
             workflow_id=workflow_id,
             user_goal=request.user_goal,
-            status="COMPLETED_AUTONOMOUS",
+            status="AWAITING_PAYMENT",
             steps=steps,
             quote=quote,
             policy_result=policy_result,
             razorpay_order=rzp_order,
             explainability_card=policy_result.explainability_card,
             audit_entry_hash=audit_entry.entry_hash,
-            total_spent=quote.final_total,
+            total_spent=0.0,
             total_saved=quote.discount_total
         )
 
@@ -353,13 +365,22 @@ class CommerceSupervisorAgent:
         adjusted_budget: Optional[float] = None
     ) -> Dict[str, Any]:
         """Resumes execution of a halted HITL checkpoint."""
+        from app.auth import identity
+        from app.commerce import paise
+        await write_transaction(db)
         gate_query = select(HITLApprovalQueue).where(HITLApprovalQueue.id == gate_id)
+        if identity.get():
+            gate_query = gate_query.where(HITLApprovalQueue.buyer_agent_id == buyer_id())
         res = await db.execute(gate_query)
         gate = res.scalar_one_or_none()
 
         if not gate:
             return {"success": False, "message": f"HITL Gate {gate_id} not found."}
 
+        stored_quote = await db.get(Quote, gate.order_id)
+        if gate.status == "APPROVED" and stored_quote and stored_quote.checkout_json:
+            return {"success": True, "status": "APPROVED", "message": "Checkout already prepared.",
+                    "razorpay_order": json.loads(stored_quote.checkout_json), "next_step": "TRIGGER_CHECKOUT_MODAL"}
         if gate.status != "PENDING":
             return {"success": False, "message": f"Gate {gate_id} already resolved as {gate.status}."}
 
@@ -368,6 +389,8 @@ class CommerceSupervisorAgent:
 
         if action == "REJECT":
             gate.status = "REJECTED"
+            if stored_quote:
+                stored_quote.status = "CANCELLED"
             gate.resolved_at = datetime.datetime.utcnow()
             await db.commit()
             
@@ -383,10 +406,39 @@ class CommerceSupervisorAgent:
                 "message": "Transaction was rejected by human operator. State safely cancelled without charges."
             }
 
+        if not stored_quote or stored_quote.expires_at <= datetime.datetime.utcnow():
+            return {"success": False, "message": "Quote expired. Create a new purchase request."}
+        if gate_details.get("tier") == "TIER_3_HARD_GATE" and not (identity.get() or {}).get("strong_auth"):
+            return {"success": False, "message": "Verify your authenticator code in Policies & approvals before approving a high-value purchase."}
+        if action == "ADJUST_BUDGET":
+            if adjusted_budget is None or paise(adjusted_budget) < stored_quote.amount_paise:
+                return {"success": False, "message": "Adjusted budget must cover the full quote."}
+            stored_quote.budget_paise = paise(adjusted_budget)
+        current_quote = DynamicQuoteResponse(**json.loads(stored_quote.data_json))
+        policy = (await db.execute(select(Policy).where(Policy.user_id == user_id()))).scalar_one_or_none()
+        tolerance = policy.price_drift_tolerance_pct if policy else 3.0
+        for item in current_quote.items:
+            if not item.is_warranty:
+                product = await CatalogService.get_product_by_sku(db, item.sku)
+                if not product or product.stock_quantity < item.quantity:
+                    return {"success": False, "message": "Inventory changed. Request a fresh quote."}
+                if item.original_price > 0 and abs(product.retail_price - item.original_price) / item.original_price * 100 > tolerance:
+                    return {"success": False, "message": "Catalog price changed beyond your policy tolerance. Request a new quote."}
+        reevaluation = await self.policy_guard.evaluate_quote(db, current_quote, user_id=user_id(),
+            user_override_budget=stored_quote.budget_paise / 100, create_gate=False)
+        old_codes = {v.split(":", 1)[0] for v in gate_details.get("violations", [])}
+        new_codes = {v.split(":", 1)[0] for v in reevaluation.violations}
+        original_card = json.loads(gate.explainability_card_json or "{}")
+        changed_spend = reevaluation.explainability_card.get("spent_24h", 0) > original_card.get("spent_24h", 0)
+        changed_daily_cap = ("daily_cap" in original_card and
+            reevaluation.explainability_card.get("daily_cap") != original_card["daily_cap"])
+        if new_codes - old_codes or changed_spend or changed_daily_cap:
+            return {"success": False, "message": "Policy boundaries changed. Request a new quote and approval."}
+        stored_quote.status = "APPROVED"
         # APPROVE or ADJUST_BUDGET
         gate.status = "APPROVED"
         gate.resolved_at = datetime.datetime.utcnow()
-        await db.commit()
+        # Approval is committed together with the stock reservation and order claim.
 
         # Log Human Approval to Audit Ledger
         await AuditLedgerEngine.append_entry(
@@ -398,7 +450,7 @@ class CommerceSupervisorAgent:
                 "action": action,
                 "adjusted_budget": adjusted_budget,
                 "amount": quote_dict.get("final_total", 0.0)
-            }
+            }, commit=False
         )
 
         # Create Razorpay Order

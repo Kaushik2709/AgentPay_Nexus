@@ -31,9 +31,12 @@ class AuditLedgerEngine:
         db: AsyncSession,
         actor: str,
         action: str,
-        payload: Dict[str, Any]
+        payload: Dict[str, Any],
+        commit: bool = True
     ) -> AuditEntry:
         # Get latest entry to obtain previous hash and next sequence number
+        from app.commerce import write_transaction
+        await write_transaction(db)
         latest_query = select(AuditEntry).order_by(AuditEntry.sequence_number.desc()).limit(1)
         res = await db.execute(latest_query)
         latest = res.scalar_one_or_none()
@@ -62,8 +65,10 @@ class AuditLedgerEngine:
             verified=True
         )
         db.add(entry)
-        await db.commit()
-        await db.refresh(entry)
+        await db.flush()
+        if commit:
+            await db.commit()
+            await db.refresh(entry)
         return entry
 
     @staticmethod

@@ -5,6 +5,7 @@ from sqlalchemy import select
 from app.db.session import get_db
 from app.db.models import Policy
 from app.schemas.agent_schemas import PolicyUpdateRequest
+from app.auth import user_id as authenticated_user_id
 
 router = APIRouter(prefix="/policy", tags=["Safety & Policy Sentinel"])
 
@@ -14,12 +15,16 @@ async def get_policy_config(
     db: AsyncSession = Depends(get_db)
 ):
     """Fetches active user spending policies and boundaries."""
+    user_id = authenticated_user_id()
     query = select(Policy).where(Policy.user_id == user_id)
     res = await db.execute(query)
     policy = res.scalar_one_or_none()
     
     if not policy:
-        raise HTTPException(status_code=404, detail="Policy not found for user.")
+        policy = Policy(id=f"policy_{user_id}", user_id=user_id)
+        db.add(policy)
+        await db.commit()
+        await db.refresh(policy)
         
     return {
         "id": policy.id,
@@ -39,6 +44,7 @@ async def update_policy_config(
     db: AsyncSession = Depends(get_db)
 ):
     """Updates user spending policies and limits in real time."""
+    user_id = authenticated_user_id()
     query = select(Policy).where(Policy.user_id == user_id)
     res = await db.execute(query)
     policy = res.scalar_one_or_none()

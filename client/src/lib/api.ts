@@ -1,4 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api";
+const API_BASE = "/api/backend";
 
 export interface Explanation {
   title?: string; status?: string; tier?: string; reasoning?: string; reason?: string;
@@ -153,6 +153,12 @@ export interface AuditEntry {
 }
 
 export const api = {
+  async getIdentity(): Promise<{ user_id: string; role: string }> {
+    return (await apiFetch(`${API_BASE}/me`)).json();
+  },
+  async getOrders(): Promise<{ id: string; status: string; amount_inr: number; created_at: string; checkout?: AgentWorkflowResponse["razorpay_order"] }[]> {
+    return (await apiFetch(`${API_BASE}/agent/orders`)).json();
+  },
   async getHealth() {
     const res = await apiFetch(`${API_BASE}/health`, { cache: "no-store" });
     if (!res.ok) throw new Error("Backend unreachable");
@@ -219,13 +225,22 @@ export const api = {
     allow_autonomous_upsell: boolean;
     force_growth_model?: string;
   }): Promise<AgentWorkflowResponse> {
+    const payload = JSON.stringify(data);
+    const previous = sessionStorage.getItem("pending-purchase");
+    let key = crypto.randomUUID();
+    if (previous) {
+      try { const pending = JSON.parse(previous); if (pending.payload === payload) key = pending.key; } catch { /* Replace malformed local state. */ }
+    }
+    sessionStorage.setItem("pending-purchase", JSON.stringify({ payload, key }));
     const res = await apiFetch(`${API_BASE}/agent/orchestrate`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
+      headers: { "Content-Type": "application/json", "Idempotency-Key": key },
+      body: payload,
     });
     if (!res.ok) throw new Error("Agent workflow orchestration failed");
-    return res.json();
+    const result = await res.json();
+    sessionStorage.removeItem("pending-purchase");
+    return result;
   },
 
   async getPendingHITLGates(): Promise<PendingGate[]> {
