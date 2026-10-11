@@ -1,6 +1,24 @@
 import os
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
+from sqlalchemy.engine import make_url
+from pathlib import Path
+
+
+def validate_database_pair(async_url, sync_url):
+    """Reject split-brain persistence without logging URLs or credentials."""
+    left, right = make_url(async_url), make_url(sync_url)
+    if left.get_backend_name() != right.get_backend_name():
+        raise ValueError("Async and sync database URLs must target the same database.")
+    if left.get_backend_name() == "sqlite":
+        if not left.database or not right.database or ":memory:" in {left.database, right.database}:
+            raise ValueError("Application SQLite configuration requires a persistent shared file.")
+        same = Path(left.database).resolve() == Path(right.database).resolve()
+    else:
+        same = ((left.host, left.port or 5432, left.database, left.username) ==
+                (right.host, right.port or 5432, right.database, right.username))
+    if not same:
+        raise ValueError("Async and sync database URLs must target the same database.")
 
 # Load environment variables from .env file
 load_dotenv()

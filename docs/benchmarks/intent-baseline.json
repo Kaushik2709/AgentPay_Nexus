@@ -1,0 +1,129 @@
+{
+  "cases": 12,
+  "deterministic_passed": 12,
+  "llm_invoked": false,
+  "proposal_comparison_supplied": false,
+  "results": [
+    {
+      "id": "monitor",
+      "deterministic": {
+        "selected_skus": [
+          "item_monitor"
+        ],
+        "budget_paise": 2500000,
+        "action": "PROPOSE"
+      },
+      "passed": true
+    },
+    {
+      "id": "full-cart",
+      "deterministic": {
+        "selected_skus": [
+          "item_monitor",
+          "item_keyboard"
+        ],
+        "budget_paise": 2500000,
+        "action": "PROPOSE"
+      },
+      "passed": true
+    },
+    {
+      "id": "exclusion",
+      "deterministic": {
+        "selected_skus": [
+          "item_mouse"
+        ],
+        "budget_paise": 2500000,
+        "action": "PROPOSE"
+      },
+      "passed": true
+    },
+    {
+      "id": "unsupported",
+      "deterministic": {
+        "selected_skus": [],
+        "budget_paise": 2500000,
+        "action": "CLARIFY"
+      },
+      "passed": true
+    },
+    {
+      "id": "injection",
+      "deterministic": {
+        "selected_skus": [],
+        "budget_paise": 2500000,
+        "action": "CLARIFY"
+      },
+      "passed": true
+    },
+    {
+      "id": "quantity",
+      "deterministic": {
+        "selected_skus": [],
+        "budget_paise": 2500000,
+        "action": "CLARIFY"
+      },
+      "passed": true
+    },
+    {
+      "id": "budget",
+      "deterministic": {
+        "selected_skus": [],
+        "budget_paise": 150000,
+        "action": "UNAVAILABLE"
+      },
+      "passed": true
+    },
+    {
+      "id": "specification",
+      "deterministic": {
+        "selected_skus": [
+          "item_monitor_pro"
+        ],
+        "budget_paise": 2500000,
+        "action": "PROPOSE"
+      },
+      "passed": true
+    },
+    {
+      "id": "sku",
+      "deterministic": {
+        "selected_skus": [
+          "item_keyboard_pro"
+        ],
+        "budget_paise": 2500000,
+        "action": "PROPOSE"
+      },
+      "passed": true
+    },
+    {
+      "id": "currency",
+      "deterministic": {
+        "selected_skus": [],
+        "budget_paise": 2500000,
+        "action": "CLARIFY"
+      },
+      "passed": true
+    },
+    {
+      "id": "conflict",
+      "deterministic": {
+        "selected_skus": [],
+        "budget_paise": 2500000,
+        "action": "CLARIFY"
+      },
+      "passed": true
+    },
+    {
+      "id": "minimum-budget",
+      "deterministic": {
+        "selected_skus": [
+          "item_monitor"
+        ],
+        "budget_paise": 2000000,
+        "action": "PROPOSE"
+      },
+      "passed": true
+    }
+  ]
+}

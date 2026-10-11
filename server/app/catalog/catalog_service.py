@@ -100,6 +100,8 @@ class CatalogService:
         retail_price: Optional[float] = None,
         cost_price: Optional[float] = None
     ) -> Optional[Product]:
+        from app.commerce import write_transaction
+        await write_transaction(db)
         product = await CatalogService.get_product_by_sku(db, sku)
         if not product:
             return None

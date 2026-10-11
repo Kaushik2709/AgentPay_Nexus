@@ -1,0 +1,2 @@
+# Optional production-oriented database driver; SQLite stays the default.
+psycopg[binary]>=3.2,<4

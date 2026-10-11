@@ -4,6 +4,9 @@ import json
 import uuid
 import datetime
 from typing import List, Dict, Any, Optional
+from types import SimpleNamespace
+from decimal import Decimal, ROUND_HALF_UP
+from app.commerce import paise
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.catalog.catalog_service import CatalogService
@@ -11,14 +14,34 @@ from app.db.models import Product, Merchant
 from app.schemas.agent_schemas import (
     DynamicQuoteRequest,
     DynamicQuoteResponse,
-    QuoteItem
+    QuoteItem as PublicQuoteItem
 )
 from app.config import settings
+
+def priced_product(product):
+    if product is None:
+        return None
+    fields = {column.name: getattr(product, column.name) for column in Product.__table__.columns}
+    for key in ("retail_price", "cost_price", "warranty_price", "upgrade_bundle_discount"):
+        fields[key] = paise(fields[key] or 0)
+    return SimpleNamespace(**fields)
+
+
+def QuoteItem(**fields):
+    # Internal pricing is integer paise; preserve the established INR API contract.
+    for key in ("unit_price", "original_price"):
+        fields[key] = fields[key] / 100
+    return PublicQuoteItem(**fields)
+
+
+def minor_round(value):
+    return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
 
 class MerchantGrowthAgent:
     """
     Merchant Revenue Optimizer Engine.
-    Implements the 4 AI Revenue Growth Models:
+    Implements four deterministic pricing strategies:
     1. Quality Upgrade (Vertical Upsell - Better product, not more products)
     2. Conversion Closer (Dynamic Anti-Abandonment Discount)
     3. Bulk / Subscription (Future LTV Lock-In)
@@ -28,7 +51,7 @@ class MerchantGrowthAgent:
         self.merchant_id = merchant_id
 
     def _sign_quote(self, payload: Dict[str, Any], secret_key: str) -> str:
-        """Signs the quote using HMAC-SHA256 for non-repudiation."""
+        """Signs the quote using HMAC-SHA256 for local integrity checks."""
         serialized = json.dumps(payload, sort_keys=True)
         return hmac.new(secret_key.encode("utf-8"), serialized.encode("utf-8"), hashlib.sha256).hexdigest()
 
@@ -41,13 +64,13 @@ class MerchantGrowthAgent:
         merchant_query = select(Merchant).where(Merchant.id == self.merchant_id)
         m_res = await db.execute(merchant_query)
         merchant = m_res.scalar_one_or_none()
-        margin_floor = merchant.margin_floor_pct if merchant else settings.DEFAULT_MERCHANT_MARGIN_FLOOR
+        margin_floor = Decimal(str(merchant.margin_floor_pct if merchant else settings.DEFAULT_MERCHANT_MARGIN_FLOOR))
         merchant_api_key = merchant.api_key if merchant else "sec_live_merchant_default"
 
         # Load requested products from DB
         requested_products: List[Product] = []
         for sku in request.requested_skus:
-            p = await CatalogService.get_product_by_sku(db, sku)
+            p = priced_product(await CatalogService.get_product_by_sku(db, sku))
             if p:
                 requested_products.append(p)
             else:
@@ -75,10 +98,10 @@ class MerchantGrowthAgent:
                 savings_breakdown="No products selected",
                 merchant_signature="",
                 explainability_note="No matching inventory found.",
-                expires_at=(datetime.datetime.utcnow() + datetime.timedelta(minutes=15)).isoformat()
+                expires_at=(datetime.datetime.utcnow() + datetime.timedelta(minutes=10)).isoformat()
             )
 
-        budget_cap = request.buyer_context.budget_cap_inr
+        budget_cap = paise(request.buyer_context.budget_cap_inr)
         strict_items = request.buyer_context.strict_items_only
         allow_upsell = request.buyer_context.allow_autonomous_upsell
         forced_model = request.preferred_growth_model
@@ -101,14 +124,14 @@ class MerchantGrowthAgent:
             elif strict_items:
                 # If strict items and headroom > 1500, attempt vertical quality upgrade
                 can_upgrade = any(p.upgrade_to_sku for p in requested_products)
-                if can_upgrade and budget_headroom >= 1500 and allow_upsell:
+                if can_upgrade and budget_headroom >= 150000 and allow_upsell:
                     selected_model = "quality_upgrade"
                 else:
                     # Conversion Closer gives instant checkout discount
                     selected_model = "conversion_closer"
             else:
                 # Not strict items
-                if allow_upsell and budget_headroom >= 2500 and any(p.upgrade_to_sku for p in requested_products):
+                if allow_upsell and budget_headroom >= 250000 and any(p.upgrade_to_sku for p in requested_products):
                     selected_model = "quality_upgrade"
                 elif any(p.warranty_price and p.warranty_price > 0 for p in requested_products):
                     selected_model = "value_services"
@@ -120,8 +143,8 @@ class MerchantGrowthAgent:
         if selected_model == "quality_upgrade" and not allow_upsell:
             selected_model = "conversion_closer" if "conversion_closer" in enabled else "standard"
         quote_items: List[QuoteItem] = []
-        discount_total = 0.0
-        warranty_total = 0.0
+        discount_total = 0
+        warranty_total = 0
         explainability_note = ""
         savings_breakdown = ""
 
@@ -132,14 +155,14 @@ class MerchantGrowthAgent:
             upgraded_any = False
             for p in requested_products:
                 if p.upgrade_to_sku and not upgraded_any:
-                    upgraded_prod = await CatalogService.get_product_by_sku(db, p.upgrade_to_sku)
+                    upgraded_prod = priced_product(await CatalogService.get_product_by_sku(db, p.upgrade_to_sku))
                     if upgraded_prod and upgraded_prod.stock_quantity > 0:
                         # Offer upgrade with bundle discount
-                        upgrade_discount = p.upgrade_bundle_discount or 1000.0
+                        upgrade_discount = p.upgrade_bundle_discount or 100000
                         upgrade_unit_price = upgraded_prod.retail_price - upgrade_discount
                         
                         # Verify margin floor
-                        prospective_margin = (upgrade_unit_price - upgraded_prod.cost_price) / upgrade_unit_price
+                        prospective_margin = Decimal(upgrade_unit_price - upgraded_prod.cost_price) / max(upgrade_unit_price, 1)
                         if (prospective_margin >= margin_floor) and (base_subtotal - p.retail_price + upgrade_unit_price) <= budget_cap:
                             quote_items.append(QuoteItem(
                                 sku=upgraded_prod.sku,
@@ -156,8 +179,8 @@ class MerchantGrowthAgent:
                             discount_total += upgrade_discount
                             total_cost = total_cost - p.cost_price + upgraded_prod.cost_price
                             upgraded_any = True
-                            explainability_note = f"Deployed Growth Model 1 (Quality Upgrade): Upgraded {p.name} -> {upgraded_prod.name} (120Hz Mini-LED) with ₹{int(upgrade_discount)} bundle discount. Zero physical clutter."
-                            savings_breakdown = f"Saved ₹{int(upgrade_discount)} on Tier-1 Creator Upgrade."
+                            explainability_note = f"Deployed Growth Model 1 (Quality Upgrade): Upgraded {p.name} -> {upgraded_prod.name} (120Hz Mini-LED) with ₹{upgrade_discount / 100:,.2f} bundle discount. Zero physical clutter."
+                            savings_breakdown = f"Saved ₹{upgrade_discount / 100:,.2f} on Tier-1 Creator Upgrade."
                             continue
                 
                 # Standard item
@@ -184,15 +207,15 @@ class MerchantGrowthAgent:
             quote_items = []
             # Calculate maximum safe discount while respecting margin floor
             # Current margin = (base_subtotal - total_cost) / base_subtotal
-            current_margin = (base_subtotal - total_cost) / max(base_subtotal, 1.0)
-            available_margin_slack = max(0.0, current_margin - margin_floor)
+            current_margin = Decimal(base_subtotal - total_cost) / max(base_subtotal, 1)
+            available_margin_slack = max(Decimal(0), current_margin - margin_floor)
             # Give 2.5% to 4% dynamic discount
-            discount_pct = min(0.035, available_margin_slack * 0.5)
-            max_discount = max(0.0, 1 - total_cost / (max(base_subtotal, 1.0) * (1 - margin_floor)))
+            discount_pct = min(Decimal("0.035"), available_margin_slack / 2)
+            max_discount = max(Decimal(0), 1 - total_cost / (max(base_subtotal, 1) * (1 - margin_floor)))
             discount_pct = min(discount_pct, max_discount)
             
             for p in requested_products:
-                item_discount = round(p.retail_price * discount_pct, 2)
+                item_discount = minor_round(p.retail_price * discount_pct)
                 item_final_price = p.retail_price - item_discount
                 discount_total += item_discount
                 quote_items.append(QuoteItem(
@@ -206,18 +229,18 @@ class MerchantGrowthAgent:
                     is_unrequested_upsell=False,
                     category=p.category
                 ))
-            explainability_note = f"Deployed Growth Model 2 (Conversion Closer): Applied dynamic {discount_pct*100:.1f}% instant-settlement discount (₹{int(discount_total)}) to secure order closure."
-            savings_breakdown = f"Instant Autonomous Discount: ₹{int(discount_total)} ({discount_pct*100:.1f}% off)"
+            explainability_note = f"Deployed Growth Model 2 (Conversion Closer): Applied dynamic {discount_pct*100:.1f}% instant-settlement discount (₹{discount_total / 100:,.2f}) to secure order closure."
+            savings_breakdown = f"Instant Autonomous Discount: ₹{discount_total / 100:,.2f} ({discount_pct*100:.1f}% off)"
 
         # ----------------------------------------------------
         # EXECUTE MODEL 3: Bulk / Subscription (Recurring LTV)
         # ----------------------------------------------------
         elif selected_model == "bulk_subscription":
             quote_items = []
-            sub_discount_pct = 0.15  # 15% discount for recurring mandate commitment
+            sub_discount_pct = Decimal("0.15")  # 15% discount for recurring mandate commitment
             for p in requested_products:
                 if p.is_subscription:
-                    item_discount = round(p.retail_price * sub_discount_pct, 2)
+                    item_discount = minor_round(p.retail_price * sub_discount_pct)
                     item_final_price = p.retail_price - item_discount
                     discount_total += item_discount
                     quote_items.append(QuoteItem(
@@ -243,8 +266,8 @@ class MerchantGrowthAgent:
                         is_unrequested_upsell=False,
                         category=p.category
                     ))
-            explainability_note = f"Deployed Growth Model 3 (Bulk / Subscription): 15% subscription-style quote discount (₹{discount_total:,.2f}). This is a one-time test order; recurring mandates are not implemented."
-            savings_breakdown = f"Subscription-style pricing discount: ₹{discount_total:,.2f} (15%)"
+            explainability_note = f"Deployed Growth Model 3 (Bulk / Subscription): 15% subscription-style quote discount (₹{discount_total / 100:,.2f}). This is a one-time test order; recurring mandates are not implemented."
+            savings_breakdown = f"Subscription-style pricing discount: ₹{discount_total / 100:,.2f} (15%)"
 
         # ----------------------------------------------------
         # EXECUTE MODEL 4: Value-Add Services & Protection
@@ -266,8 +289,8 @@ class MerchantGrowthAgent:
             
             # Attach 2-Year Express Warranty service
             primary_item = requested_products[0]
-            warranty_fee = primary_item.warranty_price or 999.0
-            warranty_cost = warranty_fee * 0.10  # 90% gross margin on digital warranty
+            warranty_fee = primary_item.warranty_price or 99900
+            warranty_cost = minor_round(Decimal(warranty_fee) / 10)  # 90% gross margin on digital warranty
             total_cost += warranty_cost
             warranty_total += warranty_fee
             
@@ -282,27 +305,28 @@ class MerchantGrowthAgent:
                 is_unrequested_upsell=True,  # Is an unrequested add-on
                 category="services"
             ))
-            explainability_note = f"Deployed Growth Model 4 (Value-Add Services): Added 2-Year Express Replacement Care for ₹{int(warranty_fee)} (90% Merchant Gross Margin)."
-            savings_breakdown = f"Protection Added: 2-Year Full Hardware Coverage (₹{int(warranty_fee)})"
+            explainability_note = f"Deployed Growth Model 4 (Value-Add Services): Added 2-Year Express Replacement Care for ₹{warranty_fee / 100:,.2f} (90% Merchant Gross Margin)."
+            savings_breakdown = f"Protection Added: 2-Year Full Hardware Coverage (₹{warranty_fee / 100:,.2f})"
 
         # Calculate final totals and gross margin as ratio e.g. 0.2046 (20.5%)
         if selected_model == "standard":
             quote_items = [QuoteItem(sku=p.sku, name=p.name, unit_price=p.retail_price,
                 original_price=p.retail_price, category=p.category) for p in requested_products]
-        items_subtotal = sum(i.unit_price * i.quantity for i in quote_items)
-        final_total = round(items_subtotal, 2)
-        effective_margin = round((final_total - total_cost) / max(final_total, 1.0), 4)
-        if final_total <= 0 or effective_margin < margin_floor - 0.0001:
+        items_subtotal = sum(paise(i.unit_price) * i.quantity for i in quote_items)
+        final_total = items_subtotal
+        exact_margin = Decimal(final_total - total_cost) / max(final_total, 1)
+        effective_margin = float(round(exact_margin, 4))
+        if final_total <= 0 or exact_margin < margin_floor:
             raise ValueError("No quote can satisfy the merchant margin floor. Adjust pricing or strategy.")
 
         quote_id = f"q_{uuid.uuid4().hex[:12]}"
-        expires_at = (datetime.datetime.utcnow() + datetime.timedelta(minutes=15)).isoformat()
+        expires_at = (datetime.datetime.utcnow() + datetime.timedelta(minutes=10)).isoformat()
 
         payload_for_signing = {
             "quote_id": quote_id,
             "merchant_id": self.merchant_id,
             "buyer_agent_id": request.buyer_agent_id,
-            "final_total": final_total,
+            "final_total": final_total / 100,
             "expires_at": expires_at,
             "items": [i.model_dump() for i in quote_items]
         }
@@ -313,10 +337,10 @@ class MerchantGrowthAgent:
             buyer_agent_id=request.buyer_agent_id,
             merchant_id=self.merchant_id,
             items=quote_items,
-            base_subtotal=base_subtotal,
-            discount_total=round(discount_total, 2),
-            warranty_total=round(warranty_total, 2),
-            final_total=final_total,
+            base_subtotal=base_subtotal / 100,
+            discount_total=discount_total / 100,
+            warranty_total=warranty_total / 100,
+            final_total=final_total / 100,
             merchant_gross_margin_pct=effective_margin,
             applied_growth_model=selected_model,
             savings_breakdown=savings_breakdown,

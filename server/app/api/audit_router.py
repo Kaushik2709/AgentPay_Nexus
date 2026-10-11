@@ -34,7 +34,7 @@ async def get_audit_trail(
 async def verify_audit_ledger(db: AsyncSession = Depends(get_db)):
     """
     Cryptographically verifies the entire SHA-256 hash chain from Genesis block.
-    Ensures zero tampering and non-repudiation.
+    Checks local entry hashes, links, and sequence continuity.
     """
     result = await AuditLedgerEngine.verify_chain_integrity(db)
     return AuditVerificationResponse(**result)

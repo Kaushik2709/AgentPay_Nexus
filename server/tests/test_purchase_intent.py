@@ -107,7 +107,7 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
     async def test_request_cannot_raise_stored_policy_cap(self):
         db = AsyncMock()
         db.add = Mock()
-        policy = NS(max_tx_amount=1000, daily_velocity_cap=50000, category_whitelist='["accessories"]', allow_autonomous_upsell=False)
+        policy = NS(max_tx_amount=1000, daily_velocity_cap=50000, category_whitelist='["accessories"]', allow_autonomous_upsell=False, price_drift_tolerance_pct=3.0)
         db.execute.return_value = NS(scalar_one_or_none=lambda: policy)
         guard = PolicyGuardAgent()
         guard._get_24h_spent_velocity = AsyncMock(return_value=0)

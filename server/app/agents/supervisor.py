@@ -29,8 +29,8 @@ from app.schemas.agent_schemas import (
 
 class CommerceSupervisorAgent:
     """
-    Central Multi-Agent State Coordinator & Orchestrator.
-    Controls the state transitions, worker routing, HITL interrupt gates, and atomic rollbacks.
+    Sequential deterministic commerce coordinator.
+    Owns policy/approval stages; checkout and settlement use separate durable transactions.
     """
     def __init__(self):
         self.buyer_agent = BuyerAgent(agent_id=buyer_id())
@@ -371,14 +371,17 @@ class CommerceSupervisorAgent:
         gate_query = select(HITLApprovalQueue).where(HITLApprovalQueue.id == gate_id)
         if identity.get():
             gate_query = gate_query.where(HITLApprovalQueue.buyer_agent_id == buyer_id())
-        res = await db.execute(gate_query)
+        res = await db.execute(gate_query.execution_options(populate_existing=True))
         gate = res.scalar_one_or_none()
 
         if not gate:
             return {"success": False, "message": f"HITL Gate {gate_id} not found."}
 
-        stored_quote = await db.get(Quote, gate.order_id)
-        if gate.status == "APPROVED" and stored_quote and stored_quote.checkout_json:
+        stored_quote = await db.get(Quote, gate.order_id, populate_existing=True)
+        existing_order = await db.get(Order, gate.order_id) if gate.order_id else None
+        if (gate.status == "APPROVED" and stored_quote and stored_quote.checkout_json
+                and existing_order and existing_order.status == "CREATED"
+                and stored_quote.expires_at > datetime.datetime.utcnow()):
             return {"success": True, "status": "APPROVED", "message": "Checkout already prepared.",
                     "razorpay_order": json.loads(stored_quote.checkout_json), "next_step": "TRIGGER_CHECKOUT_MODAL"}
         if gate.status != "PENDING":
@@ -408,6 +411,8 @@ class CommerceSupervisorAgent:
 
         if not stored_quote or stored_quote.expires_at <= datetime.datetime.utcnow():
             return {"success": False, "message": "Quote expired. Create a new purchase request."}
+        if stored_quote.status != "QUOTED" or stored_quote.buyer_agent_id != gate.buyer_agent_id:
+            return {"success": False, "message": "Quote state or ownership changed. Request a fresh quote."}
         if gate_details.get("tier") == "TIER_3_HARD_GATE" and not (identity.get() or {}).get("strong_auth"):
             return {"success": False, "message": "Verify your authenticator code in Policies & approvals before approving a high-value purchase."}
         if action == "ADJUST_BUDGET":
@@ -415,19 +420,38 @@ class CommerceSupervisorAgent:
                 return {"success": False, "message": "Adjusted budget must cover the full quote."}
             stored_quote.budget_paise = paise(adjusted_budget)
         current_quote = DynamicQuoteResponse(**json.loads(stored_quote.data_json))
+        from app.commerce import validate_quote
+        try:
+            await validate_quote(db, stored_quote, current_quote)
+        except ValueError as error:
+            return {"success": False, "message": str(error)}
+        if (quote_dict.get("quote_id") != current_quote.quote_id or
+                quote_dict.get("merchant_signature") != current_quote.merchant_signature):
+            return {"success": False, "message": "Approval quote changed. Request a fresh decision."}
+        quote_dict = current_quote.model_dump()
         policy = (await db.execute(select(Policy).where(Policy.user_id == user_id()))).scalar_one_or_none()
+        from app.agents.policy_guard import policy_snapshot
+        if "policy_snapshot" not in gate_details:
+            return {"success": False, "message": "Legacy approval requires a fresh quote and policy decision."}
+        if ("policy_snapshot" in gate_details and
+                gate_details["policy_snapshot"] != policy_snapshot(policy)):
+            return {"success": False, "message": "Policy boundaries changed. Request a new quote and approval."}
         tolerance = policy.price_drift_tolerance_pct if policy else 3.0
         for item in current_quote.items:
             if not item.is_warranty:
                 product = await CatalogService.get_product_by_sku(db, item.sku)
                 if not product or product.stock_quantity < item.quantity:
                     return {"success": False, "message": "Inventory changed. Request a fresh quote."}
-                if item.original_price > 0 and abs(product.retail_price - item.original_price) / item.original_price * 100 > tolerance:
+                from decimal import Decimal
+                if item.original_price > 0 and (abs(paise(product.retail_price) - paise(item.original_price)) * 100
+                        > paise(item.original_price) * Decimal(str(tolerance))):
                     return {"success": False, "message": "Catalog price changed beyond your policy tolerance. Request a new quote."}
         reevaluation = await self.policy_guard.evaluate_quote(db, current_quote, user_id=user_id(),
             user_override_budget=stored_quote.budget_paise / 100, create_gate=False)
         old_codes = {v.split(":", 1)[0] for v in gate_details.get("violations", [])}
         new_codes = {v.split(":", 1)[0] for v in reevaluation.violations}
+        if "UNAPPROVED_CATEGORY" in new_codes:
+            return {"success": False, "message": "Category policy cannot be overridden by approval."}
         original_card = json.loads(gate.explainability_card_json or "{}")
         changed_spend = reevaluation.explainability_card.get("spent_24h", 0) > original_card.get("spent_24h", 0)
         changed_daily_cap = ("daily_cap" in original_card and

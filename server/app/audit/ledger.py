@@ -8,8 +8,8 @@ from app.db.models import AuditEntry
 
 class AuditLedgerEngine:
     """
-    Immutable Cryptographic Audit Ledger.
-    - Uses SHA-256 hash chaining for tamper-evident non-repudiation.
+    Local tamper-evident audit ledger.
+    - Uses SHA-256 hash chaining; no external anchoring or non-repudiation.
     - Verifies the integrity of the entire decision chain.
     - Generates plain-English explainability cards for every money movement.
     """
@@ -81,7 +81,7 @@ class AuditLedgerEngine:
     async def verify_chain_integrity(db: AsyncSession) -> Dict[str, Any]:
         """
         Validates every link in the cryptographic audit ledger from genesis block to the head.
-        Ensures zero tampering and non-repudiation.
+        Detects broken sequences, links, and entry hashes without external anchoring.
         """
         query = select(AuditEntry).order_by(AuditEntry.sequence_number.asc())
         res = await db.execute(query)
@@ -102,7 +102,7 @@ class AuditLedgerEngine:
 
         for idx, entry in enumerate(entries):
             # Check link to previous hash
-            if idx > 0 and entry.prev_hash != prev_hash:
+            if entry.prev_hash != prev_hash or entry.sequence_number != idx:
                 tampered.append(entry.sequence_number)
 
             # Re-compute entry hash

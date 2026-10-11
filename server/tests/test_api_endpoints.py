@@ -135,6 +135,8 @@ class EndpointTests(unittest.TestCase):
         verification = {"razorpay_order_id": order_id, "razorpay_payment_id": "pay_fixture", "razorpay_signature": "invalid"}
         self.request("POST", "/api/razorpay/verify-payment", verification, expected=400)
         verification["razorpay_signature"] = self.provider._generate_hmac_signature(order_id, "pay_fixture")
+        self.request("POST", "/api/razorpay/verify-payment", verification, uid="second-buyer", expected=404)
+        self.provider.client.payment.fetch.assert_not_called()
         self.assertEqual(self.request("POST", "/api/razorpay/verify-payment", verification)["status"], "PAID")
         self.assertEqual(self.request("POST", "/api/razorpay/verify-payment", verification)["status"], "PAID")
         body = json.dumps({"event": "payment.captured", "payload": {"payment": {"entity": self.provider.client.payment.fetch.return_value}}}).encode()
@@ -146,6 +148,27 @@ class EndpointTests(unittest.TestCase):
         self.assertEqual(metrics["total_orders_completed"], 1)
         self.assertEqual(metrics["total_revenue_inr"], quote["final_total"])
         self.assertTrue(self.request("GET", "/api/audit/verify", role="admin")["is_valid"])
+
+    def test_human_approval_prepares_checkout_once_without_payment(self):
+        self.request("PUT", "/api/policy/config", {"max_tx_amount":1000})
+        flow=self.request("POST", "/api/agent/orchestrate", self.workflow())
+        self.assertEqual(flow["status"],"GATED_HITL")
+        body={"gate_id":flow["hitl_gate_id"],"action":"APPROVE"}
+        first=self.request("POST","/api/agent/hitl/resume",body)
+        second=self.request("POST","/api/agent/hitl/resume",body)
+        self.assertEqual(first["razorpay_order"],second["razorpay_order"])
+        self.provider.client.order.create.assert_called_once()
+        self.assertEqual(self.request("GET","/api/agent/orders")[0]["status"],"CREATED")
+
+    def test_invalid_capture_webhooks_leave_order_unpaid(self):
+        flow=self.request("POST","/api/agent/orchestrate",self.workflow())
+        order_id=flow["razorpay_order"]["razorpay_order_id"]
+        entity={"id":"pay_invalid","order_id":order_id,"amount":1,"currency":"INR","status":"captured"}
+        body=json.dumps({"event":"payment.captured","payload":{"payment":{"entity":entity}}}).encode()
+        headers={"X-Razorpay-Signature":hmac.new(b"webhook-secret",body,hashlib.sha256).hexdigest(),"X-Razorpay-Event-Id":"invalid-event"}
+        self.assertEqual(self.client.post("/api/razorpay/webhook",content=body,headers=headers).status_code,422)
+        self.assertEqual(self.client.post("/api/razorpay/webhook",content=body,headers={**headers,"X-Razorpay-Signature":"forged"}).status_code,400)
+        self.assertEqual(self.request("GET","/api/agent/orders")[0]["status"],"CREATED")
 
     def test_malformed_signed_webhook(self):
         for payload in [{"event": "payment.captured", "payload": []}, {"event": "payment.captured", "payload": {"payment": []}}]:

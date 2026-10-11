@@ -6,6 +6,7 @@ from app.db.session import get_db
 from app.db.models import Policy
 from app.schemas.agent_schemas import PolicyUpdateRequest
 from app.auth import user_id as authenticated_user_id
+from app.commerce import write_transaction
 
 router = APIRouter(prefix="/policy", tags=["Safety & Policy Sentinel"])
 
@@ -16,6 +17,7 @@ async def get_policy_config(
 ):
     """Fetches active user spending policies and boundaries."""
     user_id = authenticated_user_id()
+    await write_transaction(db)
     query = select(Policy).where(Policy.user_id == user_id)
     res = await db.execute(query)
     policy = res.scalar_one_or_none()
@@ -45,6 +47,7 @@ async def update_policy_config(
 ):
     """Updates user spending policies and limits in real time."""
     user_id = authenticated_user_id()
+    await write_transaction(db)
     query = select(Policy).where(Policy.user_id == user_id)
     res = await db.execute(query)
     policy = res.scalar_one_or_none()

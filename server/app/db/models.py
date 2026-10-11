@@ -1,13 +1,23 @@
 import datetime
 from sqlalchemy import (
-    Column, Integer, String, Float, Boolean, Text, DateTime, ForeignKey, Index
+    Column, Integer, BigInteger, String, Float, Boolean, Text, DateTime, ForeignKey, Index, event, CheckConstraint, UniqueConstraint
 )
 from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
 
+class CommerceLock(Base):
+    """One database-wide writer mutex; deliberately conservative for this prototype."""
+    __tablename__ = "commerce_lock"
+    id = Column(Integer, primary_key=True)
+
+@event.listens_for(CommerceLock.__table__, "after_create")
+def initialize_lock(table, connection, **kwargs):
+    connection.execute(table.insert().values(id=1))
+
 class Product(Base):
     __tablename__ = "products"
+    __table_args__ = (CheckConstraint("stock_quantity >= 0", name="ck_product_nonnegative_stock"),)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     sku = Column(String(64), unique=True, nullable=False, index=True)
@@ -40,7 +50,7 @@ class Policy(Base):
     __tablename__ = "policies"
 
     id = Column(String(64), primary_key=True)
-    user_id = Column(String(64), nullable=False, index=True)
+    user_id = Column(String(64), nullable=False, unique=True, index=True)
     max_tx_amount = Column(Float, nullable=False, default=25000.0)
     daily_velocity_cap = Column(Float, nullable=False, default=50000.0)
     category_whitelist = Column(Text, nullable=False, default='["monitors", "keyboards", "mice", "electronics", "accessories", "furniture", "subscriptions", "services"]')
@@ -53,7 +63,7 @@ class Order(Base):
     __tablename__ = "orders"
 
     id = Column(String(64), primary_key=True)
-    razorpay_order_id = Column(String(64), nullable=False, index=True)
+    razorpay_order_id = Column(String(64), nullable=False, unique=True, index=True)
     razorpay_payment_id = Column(String(64), nullable=True)
     buyer_agent_id = Column(String(64), nullable=False)
     merchant_id = Column(String(64), nullable=False, default="merchant_techgear_01")
@@ -62,10 +72,13 @@ class Order(Base):
     discount_amount = Column(Float, nullable=False, default=0.0)
     warranty_amount = Column(Float, nullable=False, default=0.0)
     total_amount = Column(Float, nullable=False)
+    # Canonical settlement/spend amount. Legacy INR columns remain API projections.
+    amount_paise = Column(BigInteger, nullable=False)
     currency = Column(String(8), default="INR")
     growth_model_applied = Column(String(64), nullable=True)
     items_json = Column(Text, nullable=False, default="[]")
     explainability_summary = Column(Text, nullable=True)
+    settled_at = Column(DateTime, nullable=True)  # First locally verified capture.
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 class AuditEntry(Base):
@@ -98,8 +111,8 @@ class Quote(Base):
     __tablename__ = "quotes"
     id = Column(String(64), primary_key=True)
     buyer_agent_id = Column(String(64), nullable=False, index=True)
-    amount_paise = Column(Integer, nullable=False)
-    budget_paise = Column(Integer, nullable=False)
+    amount_paise = Column(BigInteger, nullable=False)
+    budget_paise = Column(BigInteger, nullable=False)
     data_json = Column(Text, nullable=False)
     checkout_json = Column(Text, nullable=True)
     status = Column(String(32), nullable=False, default="QUOTED")
@@ -107,6 +120,8 @@ class Quote(Base):
 
 class StockReservation(Base):
     __tablename__ = "stock_reservations"
+    __table_args__ = (UniqueConstraint("order_id", "sku", name="uq_reservation_order_sku"),
+                      CheckConstraint("quantity > 0", name="ck_reservation_quantity"))
     id = Column(Integer, primary_key=True)
     order_id = Column(String(64), nullable=False, index=True)
     sku = Column(String(64), nullable=False)
@@ -119,7 +134,7 @@ class PaymentEvent(Base):
     id = Column(String(128), primary_key=True)
     payment_id = Column(String(64), nullable=False, unique=True)
     order_id = Column(String(64), nullable=False)
-    amount_paise = Column(Integer, nullable=False)
+    amount_paise = Column(BigInteger, nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 class WorkflowRun(Base):

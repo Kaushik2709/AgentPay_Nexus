@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.PROJECT_VERSION,
-    description="Autonomous Multi-Agent Commerce & Settlement Engine on Razorpay Test Rails",
+    description="Deterministic, policy-controlled commerce and verified Razorpay test settlement",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan
@@ -78,9 +78,9 @@ async def health_check():
         "status": "healthy",
         "service": settings.PROJECT_NAME,
         "version": settings.PROJECT_VERSION,
-        "environment": "production_testnet",
+        "environment": "local_test",
         "payment_rails": "Razorpay Test-Mode APIs",
-        "agent_protocol": "AgentPay ACP / MCP JSON-LD"
+        "agent_protocol": "Deterministic commerce orchestration with a JSON-LD catalog"
     }
 
 if __name__ == "__main__":

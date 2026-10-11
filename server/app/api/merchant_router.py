@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.db.session import get_db
 from app.db.models import Merchant, Order, Product
+from app.commerce import write_transaction, paise
 
 router = APIRouter(prefix="/merchant", tags=["Merchant Revenue Dashboard"])
 
@@ -26,10 +27,10 @@ async def get_merchant_dashboard(
     o_res = await db.execute(orders_query)
     paid_orders = o_res.scalars().all()
 
-    total_revenue = sum(o.total_amount for o in paid_orders)
+    total_revenue = sum(o.amount_paise for o in paid_orders) / 100
     total_orders_count = len(paid_orders)
     avg_order_value = (total_revenue / total_orders_count) if total_orders_count > 0 else 0.0
-    total_discounts_given = sum(o.discount_amount for o in paid_orders)
+    total_discounts_given = sum(paise(o.discount_amount) for o in paid_orders) / 100
 
     # Product count and inventory health
     prod_query = select(func.count(Product.id), func.sum(Product.stock_quantity))
@@ -81,6 +82,7 @@ async def update_merchant_config(
     db: AsyncSession = Depends(get_db)
 ):
     """Updates merchant profit margin floor and enabled growth models."""
+    await write_transaction(db)
     m_query = select(Merchant).where(Merchant.id == merchant_id)
     m_res = await db.execute(m_query)
     merchant = m_res.scalar_one_or_none()
